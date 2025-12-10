@@ -32,7 +32,7 @@ def get_args():
     # General configs
     parser.add_argument('--dataname', type=str, default='adult', help='Name of dataset.')
     parser.add_argument('--mode', type=str, default='train', help='Mode: train or sample.')
-    parser.add_argument('--method', type=str, default='tabsyn', help='Method: tabsyn or baseline.')
+    parser.add_argument('--method', type=str, default='tabsyn', help='Method name.')
     parser.add_argument('--gpu', type=int, default=0, help='GPU index.')
 
 
@@ -79,6 +79,18 @@ def get_args():
                         help='Select a discrete column name.')
     parser.add_argument('--sample_condition_column_value', default=None, type=str,
                         help='Specify the value of the selected discrete column.')
+    
+    ''' configs for DP-CTGAN '''
+
+    parser.add_argument('--discriminator_steps', type=int, default=1, help='Discriminator steps per generator step (DP-CTGAN).')
+
+    # DP controls (optional; only applied if supported by dp-cgans version)
+
+    parser.add_argument('--dp_private', action='store_true', default=True, help='Enable differential privacy in DP-CTGAN.')
+    parser.add_argument('--dp_noise_multiplier', type=float, default=None, help='DP noise multiplier (optional).')
+    parser.add_argument('--dp_max_grad_norm', type=float, default=None, help='DP max grad norm (optional).')
+    parser.add_argument('--dp_epsilon', type=float, default=None, help='Target epsilon (optional).')
+    parser.add_argument('--dp_delta', type=float, default=None, help='Target delta (optional).')
 
     ''' configs for GReaT '''
 
