@@ -1,0 +1,1784 @@
+./eval_dcr.py
+---
+  1  import numpy as np
+  2  import torch 
+  3  import pandas as pd
+  4  import json
+  5  
+  6  import os
+  7  import sys
+  8  sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+  9  from utils_train import preprocess, TabularDataset
+ 10  from sklearn.preprocessing import OneHotEncoder
+ 11  
+ 12  pd.options.mode.chained_assignment = None
+ 13  
+ 14  import argparse
+ 15  
+ 16  parser = argparse.ArgumentParser()
+ 17  parser.add_argument('--dataname', type=str, default='adult')
+ 18  parser.add_argument('--model', type=str, default='model')
+ 19  parser.add_argument('--path', type=str, default = None, help='The file path of the synthetic data')
+ 20  
+ 21  args = parser.parse_args()
+ 22  
+ 23  
+ 24  if __name__ == '__main__':
+ 25  
+ 26      dataname = args.dataname
+ 27      model = args.model
+ 28  
+ 29      if not args.path:
+ 30          syn_path = f'synthetic/{dataname}/{model}.csv'
+ 31      else:
+ 32          syn_path = args.path
+ 33  
+ 34      real_path = f'synthetic/{dataname}/real.csv'
+ 35      test_path = f'synthetic/{dataname}/test.csv'
+ 36  
+ 37      data_dir = f'data/{dataname}' 
+ 38  
+ 39      with open(f'{data_dir}/info.json', 'r') as f:
+ 40          info = json.load(f)
+ 41  
+ 42      syn_data = pd.read_csv(syn_path)
+ 43      real_data = pd.read_csv(real_path)
+ 44      test_data = pd.read_csv(test_path)
+ 45  
+ 46      num_col_idx = info['num_col_idx']
+ 47      cat_col_idx = info['cat_col_idx']
+ 48      target_col_idx = info['target_col_idx']
+ 49  
+ 50      task_type = info['task_type']
+ 51      if task_type == 'regression':
+ 52          num_col_idx += target_col_idx
+ 53      else:
+ 54          cat_col_idx += target_col_idx
+ 55  
+ 56      num_ranges = []
+ 57  
+ 58      real_data.columns = list(np.arange(len(real_data.columns)))
+ 59      syn_data.columns = list(np.arange(len(real_data.columns)))
+ 60      test_data.columns = list(np.arange(len(real_data.columns)))
+ 61      for i in num_col_idx:
+ 62          num_ranges.append(real_data[i].max() - real_data[i].min()) 
+ 63      
+ 64      num_ranges = np.array(num_ranges)
+ 65  
+ 66  
+ 67      num_real_data = real_data[num_col_idx]
+ 68      cat_real_data = real_data[cat_col_idx]
+ 69      num_syn_data = syn_data[num_col_idx]
+ 70      cat_syn_data = syn_data[cat_col_idx]
+ 71      num_test_data = test_data[num_col_idx]
+ 72      cat_test_data = test_data[cat_col_idx]
+ 73  
+ 74      num_real_data_np = num_real_data.to_numpy()
+ 75      cat_real_data_np = cat_real_data.to_numpy().astype('str')
+ 76      num_syn_data_np = num_syn_data.to_numpy()
+ 77      cat_syn_data_np = cat_syn_data.to_numpy().astype('str')
+ 78      num_test_data_np = num_test_data.to_numpy()
+ 79      cat_test_data_np = cat_test_data.to_numpy().astype('str')
+ 80  
+ 81      encoder = OneHotEncoder()
+ 82      encoder.fit(cat_real_data_np)
+ 83  
+ 84  
+ 85      cat_real_data_oh = encoder.transform(cat_real_data_np).toarray()
+ 86      cat_syn_data_oh = encoder.transform(cat_syn_data_np).toarray()
+ 87      cat_test_data_oh = encoder.transform(cat_test_data_np).toarray()
+ 88  
+ 89      num_real_data_np = num_real_data_np / num_ranges
+ 90      num_syn_data_np = num_syn_data_np / num_ranges
+ 91      num_test_data_np = num_test_data_np / num_ranges
+ 92  
+ 93      real_data_np = np.concatenate([num_real_data_np, cat_real_data_oh], axis=1)
+ 94      syn_data_np = np.concatenate([num_syn_data_np, cat_syn_data_oh], axis=1)
+ 95      test_data_np = np.concatenate([num_test_data_np, cat_test_data_oh], axis=1)
+ 96  
+ 97      if torch.cuda.is_available():
+ 98          device = 'cuda'
+ 99      else:
+100          device = 'cpu'
+101  
+102      real_data_th = torch.tensor(real_data_np).to(device)
+103      syn_data_th = torch.tensor(syn_data_np).to(device)  
+104      test_data_th = torch.tensor(test_data_np).to(device)
+105  
+106      dcrs_real = []
+107      dcrs_test = []
+108      batch_size = 100
+109  
+110      batch_syn_data_np = syn_data_np[i*batch_size: (i+1) * batch_size]
+111  
+112      for i in range((syn_data_th.shape[0] // batch_size) + 1):
+113          if i != (syn_data_th.shape[0] // batch_size):
+114              batch_syn_data_th = syn_data_th[i*batch_size: (i+1) * batch_size]
+115          else:
+116              batch_syn_data_th = syn_data_th[i*batch_size:]
+117              
+118          dcr_real = (batch_syn_data_th[:, None] - real_data_th).abs().sum(dim = 2).min(dim = 1).values
+119          dcr_test = (batch_syn_data_th[:, None] - test_data_th).abs().sum(dim = 2).min(dim = 1).values
+120          dcrs_real.append(dcr_real)
+121          dcrs_test.append(dcr_test)
+122          
+123      dcrs_real = torch.cat(dcrs_real)
+124      dcrs_test = torch.cat(dcrs_test)
+125      
+126      
+127      score = (dcrs_real < dcrs_test).nonzero().shape[0] / dcrs_real.shape[0]
+128      
+129      print('DCR Score, a value closer to 0.5 is better')
+130      print(f'{dataname}-{model}, DCR Score = {score}')
+
+---
+./eval_density.py
+---
+  1  import numpy as np
+  2  import pandas as pd
+  3  import os 
+  4  
+  5  import json
+  6  
+  7  # Metrics
+  8  from sdmetrics.reports.single_table import QualityReport, DiagnosticReport
+  9  
+ 10  
+ 11  import argparse
+ 12  
+ 13  parser = argparse.ArgumentParser()
+ 14  parser.add_argument('--dataname', type=str, default='adult')
+ 15  parser.add_argument('--model', type=str, default='tabsyn')
+ 16  parser.add_argument('--path', type=str, default = None, help='The file path of the synthetic data')
+ 17  
+ 18  args = parser.parse_args()
+ 19  
+ 20  
+ 21  def reorder(real_data, syn_data, info):
+ 22      num_col_idx = info['num_col_idx']
+ 23      cat_col_idx = info['cat_col_idx']
+ 24      target_col_idx = info['target_col_idx']
+ 25  
+ 26      task_type = info['task_type']
+ 27      if task_type == 'regression':
+ 28          num_col_idx += target_col_idx
+ 29      else:
+ 30          cat_col_idx += target_col_idx
+ 31  
+ 32      real_num_data = real_data[num_col_idx]
+ 33      real_cat_data = real_data[cat_col_idx]
+ 34  
+ 35      new_real_data = pd.concat([real_num_data, real_cat_data], axis=1)
+ 36      new_real_data.columns = range(len(new_real_data.columns))
+ 37  
+ 38      syn_num_data = syn_data[num_col_idx]
+ 39      syn_cat_data = syn_data[cat_col_idx]
+ 40      
+ 41      new_syn_data = pd.concat([syn_num_data, syn_cat_data], axis=1)
+ 42      new_syn_data.columns = range(len(new_syn_data.columns))
+ 43  
+ 44      
+ 45      metadata = info['metadata']
+ 46  
+ 47      columns = metadata['columns']
+ 48      metadata['columns'] = {}
+ 49  
+ 50      inverse_idx_mapping = info['inverse_idx_mapping']
+ 51  
+ 52  
+ 53      for i in range(len(new_real_data.columns)):
+ 54          if i < len(num_col_idx):
+ 55              metadata['columns'][i] = columns[num_col_idx[i]]
+ 56          else:
+ 57              metadata['columns'][i] = columns[cat_col_idx[i-len(num_col_idx)]]
+ 58      
+ 59  
+ 60      return new_real_data, new_syn_data, metadata
+ 61  
+ 62  if __name__ == '__main__':
+ 63  
+ 64      dataname = args.dataname
+ 65      model = args.model
+ 66  
+ 67      if not args.path:
+ 68          syn_path = f'synthetic/{dataname}/{model}.csv'
+ 69      else:
+ 70          syn_path = args.path
+ 71  
+ 72      real_path = f'synthetic/{dataname}/real.csv'
+ 73  
+ 74      data_dir = f'data/{dataname}' 
+ 75      print(syn_path)
+ 76  
+ 77      with open(f'{data_dir}/info.json', 'r') as f:
+ 78          info = json.load(f)
+ 79  
+ 80      syn_data = pd.read_csv(syn_path)
+ 81      real_data = pd.read_csv(real_path)
+ 82  
+ 83      save_dir = f'eval/density/{dataname}/{model}'
+ 84      if not os.path.exists(save_dir):
+ 85          os.makedirs(save_dir)
+ 86  
+ 87      real_data.columns = range(len(real_data.columns))
+ 88      syn_data.columns = range(len(syn_data.columns))
+ 89  
+ 90      metadata = info['metadata']
+ 91      metadata['columns'] = {int(key): value for key, value in metadata['columns'].items()}
+ 92  
+ 93      new_real_data, new_syn_data, metadata = reorder(real_data, syn_data, info)
+ 94  
+ 95      qual_report = QualityReport()
+ 96      qual_report.generate(new_real_data, new_syn_data, metadata)
+ 97  
+ 98      diag_report = DiagnosticReport()
+ 99      diag_report.generate(new_real_data, new_syn_data, metadata)
+100  
+101      quality =  qual_report.get_properties()
+102      diag = diag_report.get_properties()
+103  
+104      Shape = quality['Score'][0]
+105      Trend = quality['Score'][1]
+106  
+107      with open(f'{save_dir}/quality.txt', 'w') as f:
+108          f.write(f'{Shape}\n')
+109          f.write(f'{Trend}\n')
+110  
+111      Quality = (Shape + Trend) / 2
+112  
+113      shapes = qual_report.get_details(property_name='Column Shapes')
+114      trends = qual_report.get_details(property_name='Column Pair Trends')
+115      coverages = diag_report.get_details('Coverage')
+116  
+117  
+118      shapes.to_csv(f'{save_dir}/shape.csv')
+119      trends.to_csv(f'{save_dir}/trend.csv')
+120      coverages.to_csv(f'{save_dir}/coverage.csv')
+
+---
+./eval_detection.py
+---
+  1  import numpy as np
+  2  import torch 
+  3  import pandas as pd
+  4  import os 
+  5  import sys
+  6  
+  7  import json
+  8  import pickle
+  9  
+ 10  # Metrics
+ 11  from sdmetrics import load_demo
+ 12  from sdmetrics.single_table import LogisticDetection
+ 13  
+ 14  from matplotlib import pyplot as plt
+ 15  
+ 16  import argparse
+ 17  import warnings
+ 18  warnings.filterwarnings("ignore")
+ 19  
+ 20  parser = argparse.ArgumentParser()
+ 21  parser.add_argument('--dataname', type=str, default='adult')
+ 22  parser.add_argument('--model', type=str, default='real')
+ 23  
+ 24  args = parser.parse_args()
+ 25  
+ 26  def reorder(real_data, syn_data, info):
+ 27      num_col_idx = info['num_col_idx']
+ 28      cat_col_idx = info['cat_col_idx']
+ 29      target_col_idx = info['target_col_idx']
+ 30  
+ 31      task_type = info['task_type']
+ 32      if task_type == 'regression':
+ 33          num_col_idx += target_col_idx
+ 34      else:
+ 35          cat_col_idx += target_col_idx
+ 36  
+ 37      real_num_data = real_data[num_col_idx]
+ 38      real_cat_data = real_data[cat_col_idx]
+ 39  
+ 40      new_real_data = pd.concat([real_num_data, real_cat_data], axis=1)
+ 41      new_real_data.columns = range(len(new_real_data.columns))
+ 42  
+ 43      syn_num_data = syn_data[num_col_idx]
+ 44      syn_cat_data = syn_data[cat_col_idx]
+ 45      
+ 46      new_syn_data = pd.concat([syn_num_data, syn_cat_data], axis=1)
+ 47      new_syn_data.columns = range(len(new_syn_data.columns))
+ 48  
+ 49      
+ 50      metadata = info['metadata']
+ 51  
+ 52      columns = metadata['columns']
+ 53      metadata['columns'] = {}
+ 54  
+ 55      inverse_idx_mapping = info['inverse_idx_mapping']
+ 56  
+ 57  
+ 58      for i in range(len(new_real_data.columns)):
+ 59          if i < len(num_col_idx):
+ 60              metadata['columns'][i] = columns[num_col_idx[i]]
+ 61          else:
+ 62              metadata['columns'][i] = columns[cat_col_idx[i-len(num_col_idx)]]
+ 63      
+ 64  
+ 65      return new_real_data, new_syn_data, metadata
+ 66  
+ 67  if __name__ == '__main__':
+ 68  
+ 69      dataname = args.dataname
+ 70      model = args.model
+ 71  
+ 72      syn_path = f'synthetic/{dataname}/{model}.csv'
+ 73      real_path = f'synthetic/{dataname}/real.csv'
+ 74  
+ 75      data_dir = f'data/{dataname}' 
+ 76      print(syn_path)
+ 77  
+ 78      with open(f'{data_dir}/info.json', 'r') as f:
+ 79          info = json.load(f)
+ 80  
+ 81      syn_data = pd.read_csv(syn_path)
+ 82      real_data = pd.read_csv(real_path)
+ 83  
+ 84      save_dir = f'eval/density/{dataname}/{model}'
+ 85      if not os.path.exists(save_dir):
+ 86          os.makedirs(save_dir)
+ 87  
+ 88      real_data.columns = range(len(real_data.columns))
+ 89      syn_data.columns = range(len(syn_data.columns))
+ 90  
+ 91      metadata = info['metadata']
+ 92      metadata['columns'] = {int(key): value for key, value in metadata['columns'].items()}
+ 93  
+ 94      new_real_data, new_syn_data, metadata = reorder(real_data, syn_data, info)
+ 95  
+ 96      # qual_report.generate(new_real_data, new_syn_data, metadata)
+ 97  
+ 98      score = LogisticDetection.compute(
+ 99          real_data=new_real_data,
+100          synthetic_data=new_syn_data,
+101          metadata=metadata
+102      )
+103  
+104      print(f'{dataname}, {model}: {score}')
+
+---
+./eval_mle.py
+---
+ 1  import numpy as np
+ 2  import torch 
+ 3  import pandas as pd
+ 4  import os 
+ 5  import sys
+ 6  
+ 7  import json
+ 8  from mle.mle import get_evaluator
+ 9  
+10  sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+11  import warnings
+12  warnings.filterwarnings("ignore")
+13  
+14  import argparse
+15  
+16  parser = argparse.ArgumentParser()
+17  parser.add_argument('--dataname', type=str, default='adult')
+18  parser.add_argument('--model', type=str, default='real')
+19  parser.add_argument('--path', type=str, default = None, help='The file path of the synthetic data')
+20  
+21  args = parser.parse_args()
+22  
+23  # def preprocess(train, test, info)
+24  
+25  #     def norm_data(data, )
+26  
+27  if __name__ == '__main__':
+28  
+29      dataname = args.dataname
+30      model = args.model
+31      
+32      if not args.path:
+33          train_path = f'synthetic/{dataname}/{model}.csv'
+34      else:
+35          train_path = args.path
+36      test_path = f'synthetic/{dataname}/test.csv'
+37  
+38      train = pd.read_csv(train_path).to_numpy()
+39      test = pd.read_csv(test_path).to_numpy()
+40  
+41      with open(f'data/{dataname}/info.json', 'r') as f:
+42          info = json.load(f)
+43  
+44      task_type = info['task_type']
+45  
+46      evaluator = get_evaluator(task_type)
+47  
+48      if task_type == 'regression':
+49          best_r2_scores, best_rmse_scores = evaluator(train, test, info)
+50          
+51          overall_scores = {}
+52          for score_name in ['best_r2_scores', 'best_rmse_scores']:
+53              overall_scores[score_name] = {}
+54              
+55              scores = eval(score_name)
+56              for method in scores:
+57                  name = method['name']  
+58                  method.pop('name')
+59                  overall_scores[score_name][name] = method 
+60  
+61      else:
+62          best_f1_scores, best_weighted_scores, best_auroc_scores, best_acc_scores, best_avg_scores = evaluator(train, test, info)
+63  
+64          overall_scores = {}
+65          for score_name in ['best_f1_scores', 'best_weighted_scores', 'best_auroc_scores', 'best_acc_scores', 'best_avg_scores']:
+66              overall_scores[score_name] = {}
+67              
+68              scores = eval(score_name)
+69              for method in scores:
+70                  name = method['name']  
+71                  method.pop('name')
+72                  overall_scores[score_name][name] = method 
+73  
+74      if not os.path.exists(f'eval/mle/{dataname}'):
+75          os.makedirs(f'eval/mle/{dataname}')
+76      
+77      save_path = f'eval/mle/{dataname}/{model}.json'
+78      print('Saving scores to ', save_path)
+79      with open(save_path, "w") as json_file:
+80          json.dump(overall_scores, json_file, indent=4, separators=(", ", ": "))
+81  
+82          
+
+---
+./eval_quality.py
+---
+  1  import numpy as np
+  2  import pandas as pd
+  3  import os 
+  4  import sys
+  5  import json
+  6  
+  7  sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+  8  from utils_train import preprocess, TabularDataset
+  9  from sklearn.preprocessing import OneHotEncoder
+ 10  from synthcity.metrics import eval_detection, eval_performance, eval_statistical
+ 11  from synthcity.plugins.core.dataloader import GenericDataLoader
+ 12  
+ 13  pd.options.mode.chained_assignment = None
+ 14  
+ 15  import argparse
+ 16  
+ 17  parser = argparse.ArgumentParser()
+ 18  parser.add_argument('--dataname', type=str, default='adult')
+ 19  parser.add_argument('--model', type=str, default='model')
+ 20  parser.add_argument('--path', type=str, default = None, help='The file path of the synthetic data')
+ 21  
+ 22  
+ 23  args = parser.parse_args()
+ 24  
+ 25  
+ 26  if __name__ == '__main__':
+ 27  
+ 28      dataname = args.dataname
+ 29      model = args.model
+ 30  
+ 31      if not args.path:
+ 32          syn_path = f'synthetic/{dataname}/{model}.csv'
+ 33      else:
+ 34          syn_path = args.path
+ 35      real_path = f'synthetic/{dataname}/real.csv'
+ 36  
+ 37      data_dir = f'data/{dataname}' 
+ 38  
+ 39      print(syn_path)
+ 40      
+ 41  
+ 42      with open(f'{data_dir}/info.json', 'r') as f:
+ 43          info = json.load(f)
+ 44  
+ 45      syn_data = pd.read_csv(syn_path)
+ 46      real_data = pd.read_csv(real_path)
+ 47  
+ 48  
+ 49      ''' Special treatment for default dataset and CoDi model '''
+ 50  
+ 51      real_data.columns = range(len(real_data.columns))
+ 52      syn_data.columns = range(len(syn_data.columns))
+ 53  
+ 54      num_col_idx = info['num_col_idx']
+ 55      cat_col_idx = info['cat_col_idx']
+ 56      target_col_idx = info['target_col_idx']
+ 57      if info['task_type'] == 'regression':
+ 58          num_col_idx += target_col_idx
+ 59      else:
+ 60          cat_col_idx += target_col_idx
+ 61          
+ 62      num_real_data = real_data[num_col_idx]
+ 63      cat_real_data = real_data[cat_col_idx]
+ 64  
+ 65      num_real_data_np = num_real_data.to_numpy()
+ 66      cat_real_data_np = cat_real_data.to_numpy().astype('str')
+ 67          
+ 68  
+ 69      num_syn_data = syn_data[num_col_idx]
+ 70      cat_syn_data = syn_data[cat_col_idx]
+ 71  
+ 72      num_syn_data_np = num_syn_data.to_numpy()
+ 73  
+ 74      # cat_syn_data_np = np.array
+ 75      cat_syn_data_np = cat_syn_data.to_numpy().astype('str')
+ 76      if (dataname == 'default' or dataname == 'news') and model[:4] == 'codi':
+ 77          cat_syn_data_np = cat_syn_data.astype('int').to_numpy().astype('str')
+ 78  
+ 79      elif model[:5] == 'great':
+ 80          if dataname == 'shoppers':
+ 81              cat_syn_data_np[:, 1] = cat_syn_data[11].astype('int').to_numpy().astype('str')
+ 82              cat_syn_data_np[:, 2] = cat_syn_data[12].astype('int').to_numpy().astype('str')
+ 83              cat_syn_data_np[:, 3] = cat_syn_data[13].astype('int').to_numpy().astype('str')
+ 84              
+ 85              max_data = cat_real_data[14].max()
+ 86          
+ 87              cat_syn_data.loc[cat_syn_data[14] > max_data, 14] = max_data
+ 88              # cat_syn_data[14] = cat_syn_data[14].apply(lambda x: threshold if x > max_data else x)
+ 89              
+ 90              cat_syn_data_np[:, 4] = cat_syn_data[14].astype('int').to_numpy().astype('str')
+ 91              cat_syn_data_np[:, 4] = cat_syn_data[14].astype('int').to_numpy().astype('str')
+ 92          
+ 93          elif dataname in ['default', 'faults', 'beijing']:
+ 94  
+ 95              columns = cat_real_data.columns
+ 96              for i, col in enumerate(columns):
+ 97                  if (cat_real_data[col].dtype == 'int'):
+ 98  
+ 99                      max_data = cat_real_data[col].max()
+100                      min_data = cat_real_data[col].min()
+101  
+102                      cat_syn_data.loc[cat_syn_data[col] > max_data, col] = max_data
+103                      cat_syn_data.loc[cat_syn_data[col] < min_data, col] = min_data
+104  
+105                      cat_syn_data_np[:, i] = cat_syn_data[col].astype('int').to_numpy().astype('str')
+106                      
+107          else:
+108              cat_syn_data_np = cat_syn_data.to_numpy().astype('str')
+109  
+110      else:
+111          cat_syn_data_np = cat_syn_data.to_numpy().astype('str')
+112  
+113      encoder = OneHotEncoder()
+114      encoder.fit(cat_real_data_np)
+115  
+116  
+117      cat_real_data_oh = encoder.transform(cat_real_data_np).toarray()
+118      cat_syn_data_oh = encoder.transform(cat_syn_data_np).toarray()
+119  
+120      le_real_data = pd.DataFrame(np.concatenate((num_real_data_np, cat_real_data_oh), axis = 1)).astype(float)
+121      le_real_num = pd.DataFrame(num_real_data_np).astype(float)
+122      le_real_cat = pd.DataFrame(cat_real_data_oh).astype(float)
+123  
+124  
+125      le_syn_data = pd.DataFrame(np.concatenate((num_syn_data_np, cat_syn_data_oh), axis = 1)).astype(float)
+126      le_syn_num = pd.DataFrame(num_syn_data_np).astype(float)
+127      le_syn_cat = pd.DataFrame(cat_syn_data_oh).astype(float)
+128  
+129      np.set_printoptions(precision=4)
+130  
+131      result = []
+132  
+133      print('=========== All Features ===========')
+134      print('Data shape: ', le_syn_data.shape)
+135  
+136      X_syn_loader = GenericDataLoader(le_syn_data)
+137      X_real_loader = GenericDataLoader(le_real_data)
+138  
+139      quality_evaluator = eval_statistical.AlphaPrecision()
+140      qual_res = quality_evaluator.evaluate(X_real_loader, X_syn_loader)
+141      qual_res = {
+142          k: v for (k, v) in qual_res.items() if "naive" in k
+143      }  # use the naive implementation of AlphaPrecision
+144      qual_score = np.mean(list(qual_res.values()))
+145  
+146      print('alpha precision: {:.6f}, beta recall: {:.6f}'.format(qual_res['delta_precision_alpha_naive'], qual_res['delta_coverage_beta_naive'] ))
+147  
+148      Alpha_Precision_all = qual_res['delta_precision_alpha_naive']
+149      Beta_Recall_all = qual_res['delta_coverage_beta_naive']
+150  
+151      save_dir = f'eval/quality/{dataname}'
+152      if not os.path.exists(save_dir):
+153          os.makedirs(save_dir)
+154  
+155      with open(f'{save_dir}/{model}.txt', 'w') as f:
+156          f.write(f'{Alpha_Precision_all}\n')
+157          f.write(f'{Beta_Recall_all}\n')
+
+---
+./plot_compare.py
+---
+  1  #!/usr/bin/env python
+  2  import argparse
+  3  import json
+  4  import os
+  5  from pathlib import Path
+  6  from datetime import datetime
+  7  
+  8  import numpy as np
+  9  import pandas as pd
+ 10  import matplotlib
+ 11  matplotlib.use("Agg")
+ 12  import matplotlib.pyplot as plt
+ 13  import seaborn as sns
+ 14  
+ 15  def read_density(dataname, method, repo):
+ 16      base = Path(repo) / "eval" / "density" / dataname / method
+ 17      qfile = base / "quality.txt"
+ 18      if not qfile.exists():
+ 19          return None
+ 20      vals = [float(x.strip()) for x in qfile.read_text().splitlines() if x.strip()]
+ 21      if len(vals) < 2:
+ 22          return None
+ 23      return {"shape": vals[0], "trend": vals[1]}
+ 24  
+ 25  def read_detection(dataname, method, repo):
+ 26      p = Path(repo) / "eval" / "detection" / dataname / f"{method}.txt"
+ 27      if not p.exists():
+ 28          return None
+ 29      try:
+ 30          return {"logistic_detection": float(p.read_text().strip())}
+ 31      except Exception:
+ 32          return None
+ 33  
+ 34  def read_quality(dataname, method, repo):
+ 35      p = Path(repo) / "eval" / "quality" / dataname / f"{method}.txt"
+ 36      if not p.exists():
+ 37          return None
+ 38      vals = [float(x.strip()) for x in p.read_text().splitlines() if x.strip()]
+ 39      if len(vals) < 2:
+ 40          return None
+ 41      return {"alpha_precision": vals[0], "beta_recall": vals[1]}
+ 42  
+ 43  def read_mle(dataname, method, repo):
+ 44      p = Path(repo) / "eval" / "mle" / dataname / f"{method}.json"
+ 45      if not p.exists():
+ 46          return None
+ 47      obj = json.loads(p.read_text())
+ 48      # Binclass: prefer weighted_f1 / roc_auc / accuracy from best_* sets
+ 49      def pick_metric(group, key, default=None):
+ 50          try:
+ 51              # group like {"XGBClassifier": {"weighted_f1": ..., ...}}
+ 52              model_name = next(iter(group.keys()))
+ 53              return float(group[model_name][key])
+ 54          except Exception:
+ 55              return default
+ 56      out = {}
+ 57      if "best_weighted_scores" in obj:
+ 58          out["mle_weighted_f1"] = pick_metric(obj["best_weighted_scores"], "weighted_f1")
+ 59      if "best_auroc_scores" in obj:
+ 60          out["mle_roc_auc"] = pick_metric(obj["best_auroc_scores"], "roc_auc")
+ 61      if "best_acc_scores" in obj:
+ 62          out["mle_accuracy"] = pick_metric(obj["best_acc_scores"], "accuracy")
+ 63      # Regression case: r2 and RMSE
+ 64      if "best_r2_scores" in obj:
+ 65          model_name = next(iter(obj["best_r2_scores"].keys()))
+ 66          out["mle_r2"] = float(obj["best_r2_scores"][model_name]["r2"])
+ 67      if "best_rmse_scores" in obj:
+ 68          model_name = next(iter(obj["best_rmse_scores"].keys()))
+ 69          out["mle_rmse"] = float(obj["best_rmse_scores"][model_name]["RMSE"])
+ 70      return out or None
+ 71  
+ 72  def aggregate(dataname, methods, repo):
+ 73      rows = []
+ 74      for m in methods:
+ 75        row = {"method": m}
+ 76        for reader in (read_density, read_detection, read_quality, read_mle):
+ 77            vals = reader(dataname, m, repo)
+ 78            if vals:
+ 79                row.update(vals)
+ 80        rows.append(row)
+ 81      return pd.DataFrame(rows)
+ 82  
+ 83  def plot_all(df, dataname, outdir):
+ 84      outdir = Path(outdir)
+ 85      outdir.mkdir(parents=True, exist_ok=True)
+ 86      ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+ 87  
+ 88      sns.set(style="whitegrid")
+ 89      fig = plt.figure(figsize=(14, 10))
+ 90      gs = fig.add_gridspec(2, 2)
+ 91  
+ 92      # Density: shape/trend
+ 93      ax1 = fig.add_subplot(gs[0, 0])
+ 94      for metric in ["shape", "trend"]:
+ 95          if metric in df.columns:
+ 96              sns.barplot(x="method", y=metric, data=df, ax=ax1, label=metric, alpha=0.7)
+ 97      ax1.set_title("SDMetrics Density: Shape & Trend")
+ 98      ax1.set_xticklabels(ax1.get_xticklabels(), rotation=30, ha="right")
+ 99      ax1.legend()
+100  
+101      # Detection
+102      ax2 = fig.add_subplot(gs[0, 1])
+103      if "logistic_detection" in df.columns:
+104          sns.barplot(x="method", y="logistic_detection", data=df, ax=ax2, color="tab:orange")
+105      ax2.set_title("Logistic Detection (lower is better)")
+106      ax2.set_xticklabels(ax2.get_xticklabels(), rotation=30, ha="right")
+107  
+108      # Quality: alpha/beta
+109      ax3 = fig.add_subplot(gs[1, 0])
+110      for metric in ["alpha_precision", "beta_recall"]:
+111          if metric in df.columns:
+112              sns.barplot(x="method", y=metric, data=df, ax=ax3, label=metric, alpha=0.7)
+113      ax3.set_title("SynthCity Alpha Precision / Beta Recall")
+114      ax3.set_xticklabels(ax3.get_xticklabels(), rotation=30, ha="right")
+115      ax3.legend()
+116  
+117      # MLE: weighted F1 / ROC-AUC / ACC (or R2 / RMSE)
+118      ax4 = fig.add_subplot(gs[1, 1])
+119      plotted = False
+120      for metric in ["mle_weighted_f1", "mle_roc_auc", "mle_accuracy", "mle_r2"]:
+121          if metric in df.columns:
+122              sns.barplot(x="method", y=metric, data=df, ax=ax4, label=metric, alpha=0.7)
+123              plotted = True
+124      if "mle_rmse" in df.columns:
+125          # Plot RMSE as negative so higher means better in the same axis
+126          df["_mle_rmse_neg"] = -df["mle_rmse"]
+127          sns.barplot(x="method", y="_mle_rmse_neg", data=df, ax=ax4, label="(-) rmse", alpha=0.7)
+128          plotted = True
+129      ax4.set_title("MLE downstream scores")
+130      ax4.set_xticklabels(ax4.get_xticklabels(), rotation=30, ha="right")
+131      if plotted:
+132          ax4.legend()
+133  
+134      fig.suptitle(f"Comparative Evaluation — {dataname}", fontsize=16)
+135      fig.tight_layout(rect=[0, 0, 1, 0.97])
+136  
+137      png_path = outdir / f"compare_{ts}.png"
+138      fig.savefig(png_path, dpi=200)
+139      csv_path = outdir / f"summary_{ts}.csv"
+140      df.to_csv(csv_path, index=False)
+141  
+142      print(f"Saved plots: {png_path}")
+143      print(f"Saved summary: {csv_path}")
+144  
+145  def main():
+146      ap = argparse.ArgumentParser()
+147      ap.add_argument("--dataname", type=str, default="cardio")
+148      ap.add_argument("--models", type=str, nargs="+", default=["tabddpm","ctgan","dpctgan","tabsyn","great","stasy"])
+149      args = ap.parse_args()
+150  
+151      repo = Path(__file__).resolve().parents[1]  # repo root
+152      df = aggregate(args.dataname, args.models, repo)
+153      outdir = repo / "eval" / "plots" / args.dataname
+154      plot_all(df, args.dataname, outdir)
+155  
+156  if __name__ == "__main__":
+157      main()
+
+---
+./mle/mle.py
+---
+  1  import numpy as np
+  2  import pandas as pd
+  3  from xgboost import XGBClassifier, XGBRegressor
+  4  from sklearn.ensemble import AdaBoostClassifier, RandomForestClassifier, RandomForestRegressor
+  5  from sklearn.linear_model import LogisticRegression, LinearRegression
+  6  from sklearn.neural_network import MLPClassifier, MLPRegressor
+  7  from sklearn.preprocessing import OneHotEncoder, LabelEncoder
+  8  from sklearn.tree import DecisionTreeClassifier
+  9  from sklearn.metrics import classification_report, accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
+ 10  from sklearn.metrics import explained_variance_score, mean_squared_error, mean_absolute_error, r2_score
+ 11  from sklearn.model_selection import ParameterGrid
+ 12  from sklearn.utils._testing import ignore_warnings
+ 13  from sklearn.exceptions import ConvergenceWarning
+ 14  import logging
+ 15  from prdc import compute_prdc
+ 16  from tqdm import tqdm
+ 17  
+ 18  CATEGORICAL = "categorical"
+ 19  CONTINUOUS = "continuous"
+ 20  
+ 21  _MODELS = {
+ 22      'binclass': [ # 184
+ 23          #  {
+ 24          #      'class': DecisionTreeClassifier, # 48
+ 25          #      'kwargs': {
+ 26          #          'max_depth': [4, 8, 16, 32], 
+ 27          #          'min_samples_split': [2, 4, 8],
+ 28          #          'min_samples_leaf': [1, 2, 4, 8]
+ 29          #      }
+ 30          #  },
+ 31          #  {
+ 32          #      'class': AdaBoostClassifier, # 4
+ 33          #      'kwargs': {
+ 34          #          'n_estimators': [10, 50, 100, 200]
+ 35          #      }
+ 36          #  },
+ 37          #  {
+ 38          #     'class': LogisticRegression, # 36
+ 39          #     'kwargs': {
+ 40          #          'solver': ['lbfgs'],
+ 41          #          'n_jobs': [-1],
+ 42          #          'max_iter': [10, 50, 100, 200],
+ 43          #          'C': [0.01, 0.1, 1.0],
+ 44          #          'tol': [1e-01, 1e-02, 1e-04]
+ 45          #      }
+ 46          #  },
+ 47          # {
+ 48          #     'class': MLPClassifier, # 12
+ 49          #     'kwargs': {
+ 50          #         'hidden_layer_sizes': [(100, ), (200, ), (100, 100)],
+ 51          #         'max_iter': [50, 100],
+ 52          #         'alpha': [0.0001, 0.001]
+ 53          #     }
+ 54          # },
+ 55          # {
+ 56          #     'class': RandomForestClassifier, # 48
+ 57          #     'kwargs': {
+ 58          #          'max_depth': [8, 16, None], 
+ 59          #          'min_samples_split': [2, 4, 8],
+ 60          #          'min_samples_leaf': [1, 2, 4, 8],
+ 61          #         'n_jobs': [-1]
+ 62  
+ 63          #     }
+ 64          # },
+ 65          {
+ 66              'class': XGBClassifier, # 36
+ 67              'kwargs': {
+ 68                   'n_estimators': [10, 50, 100],
+ 69                   'min_child_weight': [1, 10], 
+ 70                   'max_depth': [5, 10, 20],
+ 71                   'gamma': [0.0, 1.0],
+ 72                   'objective': ['binary:logistic'],
+ 73                   'nthread': [-1],
+ 74                   'tree_method': ['gpu_hist']
+ 75              },
+ 76          }
+ 77  
+ 78      ],
+ 79      'multiclass': [ # 132
+ 80          
+ 81          # {
+ 82          #     'class': MLPClassifier, # 12
+ 83          #     'kwargs': {
+ 84          #         'hidden_layer_sizes': [(100, ), (200, ), (100, 100)],
+ 85          #         'max_iter': [50, 100],
+ 86          #         'alpha': [0.0001, 0.001]
+ 87          #     }
+ 88          # },
+ 89          #  {
+ 90          #      'class': DecisionTreeClassifier, # 48
+ 91          #      'kwargs': {
+ 92          #          'max_depth': [4, 8, 16, 32], 
+ 93          #          'min_samples_split': [2, 4, 8],
+ 94          #          'min_samples_leaf': [1, 2, 4, 8]
+ 95          #      }
+ 96          #  },
+ 97          # {
+ 98          #     'class': RandomForestClassifier, # 36
+ 99          #     'kwargs': {
+100          #          'max_depth': [8, 16, None], 
+101          #          'min_samples_split': [2, 4, 8],
+102          #          'min_samples_leaf': [1, 2, 4, 8],
+103          #          'n_jobs': [-1]
+104  
+105          #     }
+106          # },
+107          {
+108              'class': XGBClassifier, # 36
+109              'kwargs': {
+110                   'n_estimators': [10, 50, 100],
+111                   'min_child_weight': [1, 10], 
+112                   'max_depth': [5, 10, 20],
+113                   'gamma': [0.0, 1.0],
+114                   'objective': ['binary:logistic'],
+115                   'nthread': [-1],
+116                   'tree_method': ['gpu_hist']
+117              }
+118          }
+119  
+120      ],
+121      'regression': [ # 84
+122          # {
+123          #     'class': LinearRegression,
+124          # },
+125          # {
+126          #    'class': MLPRegressor, # 12
+127          #    'kwargs': {
+128          #        'hidden_layer_sizes': [(100, ), (200, ), (100, 100)],
+129          #        'max_iter': [50, 100],
+130          #        'alpha': [0.0001, 0.001]
+131          #    }
+132          #},
+133          {
+134              'class': XGBRegressor, # 36 
+135              'kwargs': {
+136                   'n_estimators': [10, 50, 100],
+137                   'min_child_weight': [1, 10], 
+138                   'max_depth': [5, 10, 20],
+139                   'gamma': [0.0, 1.0],
+140                   'objective': ['reg:linear'],
+141                   'nthread': [-1],
+142                   'tree_method': ['gpu_hist']
+143              }
+144          },
+145          # {
+146          #     'class': RandomForestRegressor, # 36
+147          #     'kwargs': {
+148          #          'max_depth': [8, 16, None], 
+149          #          'min_samples_split': [2, 4, 8],
+150          #          'min_samples_leaf': [1, 2, 4, 8],
+151          #          'n_jobs': [-1]
+152          #     }
+153          # }
+154      ]
+155  }
+156  
+157  def feat_transform(data, info, label_encoder = None, encoders = None, cmax = None, cmin = None):
+158      num_col_idx = info['num_col_idx']
+159      cat_col_idx = info['cat_col_idx']
+160      target_col_idx = info['target_col_idx']
+161  
+162      num_cols = len(num_col_idx + cat_col_idx + target_col_idx)
+163      features = [] 
+164      
+165      if not encoders:
+166          encoders = dict()
+167      for idx in range(num_cols):
+168          col = data[:, idx]
+169  
+170          if idx in target_col_idx:
+171  
+172              if info['task_type'] != 'regression':
+173                  
+174                  if not label_encoder:
+175                      label_encoder = LabelEncoder()
+176                      label_encoder.fit(col)
+177  
+178                  encoded_labels = label_encoder.transform(col)
+179                  labels = encoded_labels
+180              else:
+181                  col = col.astype(np.float32)
+182                  labels = col.astype(np.float32)
+183              
+184              continue
+185  
+186          if idx in num_col_idx:
+187              col = col.astype(np.float32)
+188  
+189              if not cmin:
+190                  cmin = col.min()
+191              
+192              if not cmax:
+193                  cmax = col.max()
+194  
+195              if cmin >= 0 and cmax >= 1e3:
+196                  feature = np.log(np.maximum(col, 1e-2))
+197  
+198              else:
+199                  feature = (col - cmin) / (cmax - cmin) * 5
+200  
+201          elif idx in cat_col_idx:
+202              encoder = encoders.get(idx)
+203              col = col.reshape(-1, 1)
+204              if encoder:
+205                  feature = encoder.transform(col)
+206              else:
+207                  encoder = OneHotEncoder(sparse=False, handle_unknown='ignore')
+208                  encoders[idx] = encoder
+209                  feature = encoder.fit_transform(col)
+210                  
+211  
+212          features.append(feature)
+213      features = np.column_stack(features)
+214      return features, labels, label_encoder, encoders, cmax, cmin
+215  
+216  
+217  def prepare_ml_problem(train, test, info):
+218      # test_X, test_y, label_encoder, encoders = feat_transform(test, info)
+219      # train_X, train_y, _, _ = feat_transform(train, info, label_encoder, encoders)
+220      
+221      train_X, train_y, label_encoder, encoders, cmax, cmin = feat_transform(train, info)
+222      test_X, test_y, _, _ , _, _ = feat_transform(test, info, label_encoder, encoders, cmax, cmin)
+223  
+224      total_train_num = train_X.shape[0]
+225      val_num = int(total_train_num / 9)
+226  
+227      total_train_idx = np.arange(total_train_num)
+228      np.random.shuffle(total_train_idx)
+229      train_idx = total_train_idx[val_num:]
+230      val_idx = total_train_idx[:val_num]
+231  
+232  
+233  
+234      # val_X, val_y = train_X[val_idx], train_y[val_idx]
+235      # train_X, train_y = train_X[train_idx], train_y[train_idx]
+236      
+237      # model = _MODELS[info['task_type']]
+238      
+239      # return train_X, train_y, train_X, train_y, test_X, test_y, model
+240  
+241  
+242  
+243      val_X, val_y = train_X[val_idx], train_y[val_idx]
+244      train_X, train_y = train_X[train_idx], train_y[train_idx]
+245      
+246      model = _MODELS[info['task_type']]
+247      
+248      return train_X, train_y, val_X, val_y, test_X, test_y, model
+249  
+250  class FeatureMaker:
+251  
+252      def __init__(self, metadata, label_column='label', label_type='int', sample=50000):
+253          self.columns = metadata['columns']
+254          self.label_column = label_column
+255          self.label_type = label_type
+256          self.sample = sample
+257          self.encoders = dict()
+258  
+259      def make_features(self, data):
+260          data = data.copy()
+261          np.random.shuffle(data)
+262          data = data[:self.sample]
+263  
+264          features = []
+265          labels = []
+266  
+267          for index, cinfo in enumerate(self.columns):
+268              col = data[:, index]
+269              if cinfo['name'] == self.label_column:
+270                  if self.label_type == 'int':
+271                      labels = col.astype(int)
+272                  elif self.label_type == 'float':
+273                      labels = col.astype(float)
+274                  else:
+275                      assert 0, 'unkown label type'
+276                  continue
+277  
+278              if cinfo['type'] == CONTINUOUS:
+279                  cmin = cinfo['min']
+280                  cmax = cinfo['max']
+281                  if cmin >= 0 and cmax >= 1e3:
+282                      feature = np.log(np.maximum(col, 1e-2))
+283  
+284                  else:
+285                      feature = (col - cmin) / (cmax - cmin) * 5
+286  
+287              else:
+288                  if cinfo['size'] <= 2:
+289                      feature = col
+290  
+291                  else:
+292                      encoder = self.encoders.get(index)
+293                      col = col.reshape(-1, 1)
+294                      if encoder:
+295                          feature = encoder.transform(col)
+296                      else:
+297                          encoder = OneHotEncoder(sparse=False, handle_unknown='ignore')
+298                          self.encoders[index] = encoder
+299                          feature = encoder.fit_transform(col)
+300  
+301              features.append(feature)
+302  
+303          features = np.column_stack(features)
+304  
+305          return features, labels
+306  
+307  
+308  def _prepare_ml_problem(train, val, test, metadata, eval): 
+309      fm = FeatureMaker(metadata)
+310      x_trains, y_trains = [], []
+311  
+312      for i in train:
+313          x_train, y_train = fm.make_features(i)
+314          x_trains.append(x_train)
+315          y_trains.append(y_train)
+316  
+317      x_val, y_val = fm.make_features(val)
+318      if eval is None:
+319          x_test = None
+320          y_test = None
+321      else:
+322          x_test, y_test = fm.make_features(test)
+323      model = _MODELS[metadata['problem_type']]
+324  
+325      return x_trains, y_trains, x_val, y_val, x_test, y_test, model
+326  
+327  
+328  def _weighted_f1(y_test, pred):
+329      report = classification_report(y_test, pred, output_dict=True)
+330      classes = list(report.keys())[:-3]
+331      proportion = [  report[i]['support'] / len(y_test) for i in classes]
+332      weighted_f1 = np.sum(list(map(lambda i, prop: report[i]['f1-score']* (1-prop)/(len(classes)-1), classes, proportion)))
+333      return weighted_f1 
+334  
+335  
+336  @ignore_warnings(category=ConvergenceWarning)
+337  def _evaluate_multi_classification(train, test, info):
+338      x_trains, y_trains, x_valid, y_valid, x_test, y_test, classifiers = prepare_ml_problem(train, test, info)
+339      best_f1_scores = []
+340      unique_labels = np.unique(y_trains)
+341  
+342  
+343      best_f1_scores = []
+344      best_weighted_scores = []
+345      best_auroc_scores = []
+346      best_acc_scores = []
+347      best_avg_scores = []
+348  
+349      for model_spec in classifiers:
+350          model_class = model_spec['class']
+351          model_kwargs = model_spec.get('kwargs', dict())
+352          model_repr = model_class.__name__
+353  
+354          unique_labels = np.unique(y_trains)
+355  
+356          param_set = list(ParameterGrid(model_kwargs))
+357  
+358          results = []
+359          for param in tqdm(param_set):
+360              model = model_class(**param)
+361  
+362              try:
+363                  model.fit(x_trains, y_trains)
+364              except:
+365                  pass 
+366  
+367              if len(unique_labels) != len(np.unique(y_valid)):
+368                  pred = [unique_labels[0]] * len(x_valid)
+369                  pred_prob = np.array([1.] * len(x_valid))
+370              else:
+371                  pred = model.predict(x_valid)
+372                  pred_prob = model.predict_proba(x_valid)
+373  
+374              macro_f1 = f1_score(y_valid, pred, average='macro')
+375              weighted_f1 = _weighted_f1(y_valid, pred)
+376              acc = accuracy_score(y_valid, pred)
+377  
+378              # 3. auroc
+379      #         size = [a["size"] for a in metadata["columns"] if a["name"] == "label"][0]
+380              size = len(set(unique_labels))
+381              rest_label = set(range(size)) - set(unique_labels)
+382              tmp = []
+383              j = 0
+384              for i in range(size):
+385                  if i in rest_label:
+386                      tmp.append(np.array([0] * y_valid.shape[0])[:,np.newaxis])
+387                  else:
+388                      try:
+389                          tmp.append(pred_prob[:,[j]])
+390                      except:
+391                          tmp.append(pred_prob[:, np.newaxis])
+392                      j += 1
+393  
+394              roc_auc = roc_auc_score(np.eye(size)[y_valid], np.hstack(tmp), multi_class='ovr')
+395  
+396              results.append(
+397                  {   
+398                      "name": model_repr,
+399                      "param": param,
+400                      "macro_f1": macro_f1,
+401                      "weighted_f1": weighted_f1,
+402                      "roc_auc": roc_auc, 
+403                      "accuracy": acc
+404                  }
+405              )
+406  
+407          results = pd.DataFrame(results)
+408          results['avg'] = results.loc[:, ['macro_f1', 'weighted_f1', 'roc_auc']].mean(axis=1)        
+409          best_f1_param = results.param[results.macro_f1.idxmax()]
+410          best_weighted_param = results.param[results.weighted_f1.idxmax()]
+411          best_auroc_param = results.param[results.roc_auc.idxmax()]
+412          best_acc_param = results.param[results.accuracy.idxmax()]
+413          best_avg_param = results.param[results.avg.idxmax()]
+414  
+415  
+416          # test the best model
+417          results = pd.DataFrame(results)
+418          # best_param = results.param[results.macro_f1.idxmax()]
+419  
+420          def _calc(best_model):
+421              best_scores = []
+422              
+423              x_train = x_trains
+424              y_train = y_trains
+425              
+426              try:
+427                  best_model.fit(x_train, y_train)
+428              except:
+429                  pass 
+430  
+431              if len(unique_labels) != len(np.unique(y_test)):
+432                  pred = [unique_labels[0]] * len(x_test)
+433                  pred_prob = np.array([1.] * len(x_test))
+434              else:
+435                  pred = best_model.predict(x_test)
+436                  pred_prob = best_model.predict_proba(x_test)
+437  
+438              macro_f1 = f1_score(y_test, pred, average='macro')
+439              weighted_f1 = _weighted_f1(y_test, pred)
+440              acc = accuracy_score(y_test, pred)
+441  
+442              # 3. auroc
+443              size = len(set(unique_labels))
+444              rest_label = set(range(size)) - set(unique_labels)
+445              tmp = []
+446              j = 0
+447              for i in range(size):
+448                  if i in rest_label:
+449                      tmp.append(np.array([0] * y_test.shape[0])[:,np.newaxis])
+450                  else:
+451                      try:
+452                          tmp.append(pred_prob[:,[j]])
+453                      except:
+454                          tmp.append(pred_prob[:, np.newaxis])
+455                      j += 1
+456              roc_auc = roc_auc_score(np.eye(size)[y_test], np.hstack(tmp), multi_class='ovr')
+457  
+458              best_scores.append(
+459                  {   
+460                      "name": model_repr,
+461                      "macro_f1": macro_f1,
+462                      "weighted_f1": weighted_f1,
+463                      "roc_auc": roc_auc, 
+464                      "accuracy": acc
+465                  }
+466              )
+467              return pd.DataFrame(best_scores)
+468  
+469          def _df(dataframe):
+470              return {
+471                  "name": model_repr,
+472                  "macro_f1": dataframe.macro_f1.values[0],
+473                  "roc_auc": dataframe.roc_auc.values[0],
+474                  "weighted_f1": dataframe.weighted_f1.values[0],
+475                  "accuracy": dataframe.accuracy.values[0],
+476              }
+477  
+478          best_f1_scores.append(_df(_calc(model_class(**best_f1_param))))
+479          best_weighted_scores.append(_df(_calc(model_class(**best_weighted_param))))
+480          best_auroc_scores.append(_df(_calc(model_class(**best_auroc_param))))
+481          best_acc_scores.append(_df(_calc(model_class(**best_acc_param))))
+482          best_avg_scores.append(_df(_calc(model_class(**best_avg_param))))
+483  
+484      return best_f1_scores, best_weighted_scores, best_auroc_scores, best_acc_scores, best_avg_scores
+485  
+486  @ignore_warnings(category=ConvergenceWarning)
+487  def _evaluate_binary_classification(train, test, info):
+488      x_trains, y_trains, x_valid, y_valid, x_test, y_test, classifiers = prepare_ml_problem(train, test, info)
+489  
+490      unique_labels = np.unique(y_trains)
+491  
+492      best_f1_scores = []
+493      best_weighted_scores = []
+494      best_auroc_scores = []
+495      best_acc_scores = []
+496      best_avg_scores = []
+497  
+498      for model_spec in classifiers:
+499  
+500          model_class = model_spec['class']
+501          model_kwargs = model_spec.get('kwargs', dict())
+502          model_repr = model_class.__name__
+503  
+504          unique_labels = np.unique(y_trains)
+505  
+506          param_set = list(ParameterGrid(model_kwargs))
+507  
+508          results = []
+509          for param in tqdm(param_set):
+510              model = model_class(**param)
+511  
+512              try:
+513                  model.fit(x_trains, y_trains)
+514              except ValueError:
+515                  pass
+516  
+517              if len(unique_labels) == 1:
+518                  pred = [unique_labels[0]] * len(x_valid)
+519                  pred_prob = np.array([1.] * len(x_valid))
+520              else:
+521                  pred = model.predict(x_valid)
+522                  pred_prob = model.predict_proba(x_valid)
+523  
+524              binary_f1 = f1_score(y_valid, pred, average='binary')
+525              weighted_f1 = _weighted_f1(y_valid, pred)
+526              acc = accuracy_score(y_valid, pred)
+527              precision = precision_score(y_valid, pred, average='binary')
+528              recall = recall_score(y_valid, pred, average='binary')
+529              macro_f1 = f1_score(y_valid, pred, average='macro')
+530  
+531              # auroc
+532              size = 2
+533              rest_label = set(range(size)) - set(unique_labels)
+534              tmp = []
+535              j = 0
+536              for i in range(size):
+537                  if i in rest_label:
+538                      tmp.append(np.array([0] * y_valid.shape[0])[:,np.newaxis])
+539                  else:
+540                      try:
+541                          tmp.append(pred_prob[:,[j]])
+542                      except:
+543                          tmp.append(pred_prob[:, np.newaxis])
+544                      j += 1
+545              roc_auc = roc_auc_score(np.eye(size)[y_valid], np.hstack(tmp))
+546  
+547              results.append(
+548                  {   
+549                      "name": model_repr,
+550                      "param": param,
+551                      "binary_f1": binary_f1,
+552                      "weighted_f1": weighted_f1,
+553                      "roc_auc": roc_auc, 
+554                      "accuracy": acc, 
+555                      "precision": precision, 
+556                      "recall": recall, 
+557                      "macro_f1": macro_f1
+558                  }
+559              )
+560  
+561  
+562          # test the best model
+563          results = pd.DataFrame(results)
+564          results['avg'] = results.loc[:, ['binary_f1', 'weighted_f1', 'roc_auc']].mean(axis=1)        
+565          best_f1_param = results.param[results.binary_f1.idxmax()]
+566          best_weighted_param = results.param[results.weighted_f1.idxmax()]
+567          best_auroc_param = results.param[results.roc_auc.idxmax()]
+568          best_acc_param = results.param[results.accuracy.idxmax()]
+569          best_avg_param = results.param[results.avg.idxmax()]
+570  
+571  
+572          def _calc(best_model):
+573              best_scores = []
+574  
+575              best_model.fit(x_trains, y_trains)
+576  
+577              if len(unique_labels) == 1:
+578                  pred = [unique_labels[0]] * len(x_test)
+579                  pred_prob = np.array([1.] * len(x_test))
+580              else:
+581                  pred = best_model.predict(x_test)
+582                  pred_prob = best_model.predict_proba(x_test)
+583  
+584              binary_f1 = f1_score(y_test, pred, average='binary')
+585              weighted_f1 = _weighted_f1(y_test, pred)
+586              acc = accuracy_score(y_test, pred)
+587              precision = precision_score(y_test, pred, average='binary')
+588              recall = recall_score(y_test, pred, average='binary')
+589              macro_f1 = f1_score(y_test, pred, average='macro')
+590  
+591              # auroc
+592              size = 2
+593              rest_label = set(range(size)) - set(unique_labels)
+594              tmp = []
+595              j = 0
+596              for i in range(size):
+597                  if i in rest_label:
+598                      tmp.append(np.array([0] * y_test.shape[0])[:,np.newaxis])
+599                  else:
+600                      try:
+601                          tmp.append(pred_prob[:,[j]])
+602                      except:
+603                          tmp.append(pred_prob[:, np.newaxis])
+604                      j += 1
+605              try:
+606                  roc_auc = roc_auc_score(np.eye(size)[y_test], np.hstack(tmp))
+607              except ValueError:
+608                  tmp[1] = tmp[1].reshape(20000, 1)
+609                  roc_auc = roc_auc_score(np.eye(size)[y_test], np.hstack(tmp))
+610  
+611              best_scores.append(
+612                  {   
+613                      "name": model_repr,
+614                      # "param": param,
+615                      "binary_f1": binary_f1,
+616                      "weighted_f1": weighted_f1,
+617                      "roc_auc": roc_auc, 
+618                      "accuracy": acc, 
+619                      "precision": precision, 
+620                      "recall": recall, 
+621                      "macro_f1": macro_f1
+622                  }
+623              )
+624  
+625              return pd.DataFrame(best_scores)
+626          def _df(dataframe):
+627              return {
+628                  "name": model_repr,
+629                  "binary_f1": dataframe.binary_f1.values[0],
+630                  "roc_auc": dataframe.roc_auc.values[0],
+631                  "weighted_f1": dataframe.weighted_f1.values[0],
+632                  "accuracy": dataframe.accuracy.values[0],
+633              }
+634          
+635          best_f1_scores.append(_df(_calc(model_class(**best_f1_param))))
+636          best_weighted_scores.append(_df(_calc(model_class(**best_weighted_param))))
+637          best_auroc_scores.append(_df(_calc(model_class(**best_auroc_param))))
+638          best_acc_scores.append(_df(_calc(model_class(**best_acc_param))))
+639          best_avg_scores.append(_df(_calc(model_class(**best_avg_param))))
+640  
+641      return best_f1_scores, best_weighted_scores, best_auroc_scores, best_acc_scores, best_avg_scores
+642  
+643  @ignore_warnings(category=ConvergenceWarning)
+644  def _evaluate_regression(train, test, info):
+645      
+646      x_trains, y_trains, x_valid, y_valid, x_test, y_test, regressors = prepare_ml_problem(train, test, info)
+647  
+648      
+649      best_r2_scores = []
+650      best_ev_scores = []
+651      best_mae_scores = []
+652      best_rmse_scores = []
+653      best_avg_scores = []
+654  
+655      y_trains = np.log(np.clip(y_trains, 1, 20000))
+656      y_test = np.log(np.clip(y_test, 1, 20000))
+657  
+658      for model_spec in regressors:
+659          model_class = model_spec['class']
+660          model_kwargs = model_spec.get('kwargs', dict())
+661          model_repr = model_class.__name__
+662  
+663          param_set = list(ParameterGrid(model_kwargs))
+664  
+665          results = []
+666          for param in tqdm(param_set):
+667              model = model_class(**param)
+668              model.fit(x_trains, y_trains)
+669              pred = model.predict(x_valid)
+670  
+671              r2 = r2_score(y_valid, pred)
+672              explained_variance = explained_variance_score(y_valid, pred)
+673              mean_squared = mean_squared_error(y_valid, pred)
+674              root_mean_squared = mean_squared_error(y_valid, pred, squared=False)
+675              mean_absolute = mean_absolute_error(y_valid, pred)
+676  
+677              results.append(
+678                  {   
+679                      "name": model_repr,
+680                      "param": param,
+681                      "r2": r2,
+682                      "explained_variance": explained_variance,
+683                      "mean_squared": mean_squared, 
+684                      "mean_absolute": mean_absolute, 
+685                      "rmse": root_mean_squared
+686                  }
+687              )
+688  
+689          results = pd.DataFrame(results)
+690          # results['avg'] = results.loc[:, ['r2', 'rmse']].mean(axis=1)        
+691          best_r2_param = results.param[results.r2.idxmax()]
+692          best_ev_param = results.param[results.explained_variance.idxmax()]
+693          best_mae_param = results.param[results.mean_absolute.idxmin()]
+694          best_rmse_param = results.param[results.rmse.idxmin()]
+695          # best_avg_param = results.param[results.avg.idxmax()]
+696  
+697          def _calc(best_model):
+698              best_scores = []
+699              x_train, y_train = x_trains, y_trains
+700              
+701              best_model.fit(x_train, y_train)
+702              pred = best_model.predict(x_test)
+703  
+704              r2 = r2_score(y_test, pred)
+705              explained_variance = explained_variance_score(y_test, pred)
+706              mean_squared = mean_squared_error(y_test, pred)
+707              root_mean_squared = mean_squared_error(y_test, pred, squared=False)
+708              mean_absolute = mean_absolute_error(y_test, pred)
+709  
+710              best_scores.append(
+711                  {   
+712                      "name": model_repr,
+713                      "param": param,
+714                      "r2": r2,
+715                      "explained_variance": explained_variance,
+716                      "mean_squared": mean_squared, 
+717                      "mean_absolute": mean_absolute, 
+718                      "rmse": root_mean_squared
+719                  }
+720              )
+721  
+722              return pd.DataFrame(best_scores)
+723  
+724          def _df(dataframe):
+725              return {
+726                  "name": model_repr,
+727                  "r2": dataframe.r2.values[0].astype(float),
+728                  "explained_variance": dataframe.explained_variance.values[0].astype(float),
+729                  "MAE": dataframe.mean_absolute.values[0].astype(float),
+730                  "RMSE": dataframe.rmse.values[0].astype(float),
+731              }
+732  
+733          best_r2_scores.append(_df(_calc(model_class(**best_r2_param))))
+734          best_ev_scores.append(_df(_calc(model_class(**best_ev_param))))
+735          best_mae_scores.append(_df(_calc(model_class(**best_mae_param))))
+736          best_rmse_scores.append(_df(_calc(model_class(**best_rmse_param))))
+737  
+738      return best_r2_scores, best_rmse_scores
+739  
+740  @ignore_warnings(category=ConvergenceWarning)
+741  def compute_diversity(train, fake):
+742      nearest_k = 5
+743      if train.shape[0] >= 50000:
+744          num = np.random.randint(0, train.shape[0], 50000)
+745          real_features = train[num]
+746          fake_features_lst = [i[num] for i in fake]
+747      else:
+748          num = train.shape[0]
+749          real_features = train[:num]
+750          fake_features_lst = [i[:num] for i in fake]
+751      scores = []
+752      for i, data in enumerate(fake_features_lst):
+753          fake_features = data
+754          metrics = compute_prdc(real_features=real_features,
+755                          fake_features=fake_features,
+756                          nearest_k=nearest_k)
+757          metrics['i'] = i
+758          scores.append(metrics)
+759      return pd.DataFrame(scores).mean(axis=0), pd.DataFrame(scores).std(axis=0)
+760  
+761  _EVALUATORS = {
+762      'binclass': _evaluate_binary_classification,
+763      'multiclass': _evaluate_multi_classification,
+764      'regression': _evaluate_regression
+765  }
+766  
+767  def get_evaluator(problem_type):
+768      return _EVALUATORS[problem_type]
+769  
+770  
+771  def compute_scores(train, test, synthesized_data, metadata, eval):
+772      a, b, c = _EVALUATORS[metadata['problem_type']](train=train, test=test, fake=synthesized_data, metadata=metadata, eval=eval)
+773      if eval is None:
+774          return a.mean(axis=0), a.std(axis=0), a[['name','param']]
+775      else:
+776          return a.mean(axis=0), a.std(axis=0)
+777  
+
+---
+./mle/tabular_dataload.py
+---
+  1  # coding=utf-8
+  2  # Copyright 2020 The Google Research Authors.
+  3  #
+  4  # Licensed under the Apache License, Version 2.0 (the "License");
+  5  # you may not use this file except in compliance with the License.
+  6  # You may obtain a copy of the License at
+  7  #
+  8  #     http://www.apache.org/licenses/LICENSE-2.0
+  9  #
+ 10  # Unless required by applicable law or agreed to in writing, software
+ 11  # distributed under the License is distributed on an "AS IS" BASIS,
+ 12  # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ 13  # See the License for the specific language governing permissions and
+ 14  # limitations under the License.
+ 15  
+ 16  # pylint: skip-file
+ 17  """Return training and evaluation/test datasets from config files."""
+ 18  import torch
+ 19  import numpy as np
+ 20  import pandas as pd
+ 21  from tabular_transformer import GeneralTransformer
+ 22  import json
+ 23  import logging
+ 24  import os
+ 25  
+ 26  CATEGORICAL = "categorical"
+ 27  CONTINUOUS = "continuous"
+ 28  
+ 29  LOGGER = logging.getLogger(__name__)
+ 30  
+ 31  DATA_PATH = os.path.join(os.path.dirname(__file__), 'tabular_datasets')
+ 32  
+ 33  def _load_json(path):
+ 34      with open(path) as json_file:
+ 35          return json.load(json_file)
+ 36  
+ 37  
+ 38  def _load_file(filename, loader):
+ 39      local_path = os.path.join(DATA_PATH, filename)
+ 40      
+ 41      if loader == np.load:
+ 42          return loader(local_path, allow_pickle=True)
+ 43      return loader(local_path)
+ 44  
+ 45  
+ 46  def _get_columns(metadata):
+ 47      categorical_columns = list()
+ 48  
+ 49      for column_idx, column in enumerate(metadata['columns']):
+ 50          if column['type'] == CATEGORICAL:
+ 51              categorical_columns.append(column_idx)
+ 52  
+ 53      return categorical_columns
+ 54  
+ 55  
+ 56  def load_data(name):
+ 57      data_dir = f'data/{name}'
+ 58      info_path = f'{data_dir}/info.json'
+ 59  
+ 60      train = pd.read_csv(f'{data_dir}/train.csv').to_numpy()
+ 61      test = pd.read_csv(f'{data_dir}/test.csv').to_numpy()
+ 62  
+ 63      with open(f'{data_dir}/info.json', 'r') as f:
+ 64          info = json.load(f)
+ 65  
+ 66      task_type = info['task_type']
+ 67  
+ 68      num_cols = info['num_col_idx']
+ 69      cat_cols = info['cat_col_idx']
+ 70      target_cols = info['target_col_idx']
+ 71  
+ 72      if task_type != 'regression':
+ 73          cat_cols = cat_cols + target_cols
+ 74  
+ 75      return train, test, (cat_cols, info)
+ 76          
+ 77  
+ 78  def get_dataset(FLAGS, evaluation=False):
+ 79  
+ 80      batch_size = FLAGS.training_batch_size if not evaluation else FLAGS.eval_batch_size
+ 81  
+ 82      if batch_size % torch.cuda.device_count() != 0:
+ 83          raise ValueError(f'Batch sizes ({batch_size} must be divided by'
+ 84                              f'the number of devices ({torch.cuda.device_count()})')
+ 85  
+ 86  
+ 87      # Create dataset builders for tabular data.
+ 88      train, test, cols = load_data(FLAGS.dataname)
+ 89      cols_idx = list(np.arange(train.shape[1]))
+ 90      dis_idx = cols[0]
+ 91      con_idx = [x for x in cols_idx if x not in dis_idx]
+ 92  
+ 93      #split continuous and categorical
+ 94      train_con = train[:,con_idx]
+ 95      train_dis = train[:,dis_idx]
+ 96  
+ 97      #new index
+ 98      cat_idx_ = list(np.arange(train_dis.shape[1]))[:len(cols[0])]
+ 99  
+100      transformer_con = GeneralTransformer()
+101      transformer_dis = GeneralTransformer()
+102  
+103      transformer_con.fit(train_con, [])
+104      transformer_dis.fit(train_dis, cat_idx_)
+105  
+106      train_con_data = transformer_con.transform(train_con)
+107      train_dis_data = transformer_dis.transform(train_dis)
+108  
+109  
+110      return train, train_con_data, train_dis_data, test, (transformer_con, transformer_dis, cols[1]), con_idx, dis_idx
+111          
+
+---
+./mle/tabular_transformer.py
+---
+  1  import numpy as np
+  2  import pandas as pd
+  3  
+  4  CATEGORICAL = "categorical"
+  5  CONTINUOUS = "continuous"
+  6  
+  7  class Transformer:
+  8  
+  9      @staticmethod
+ 10      def get_metadata(data, categorical_columns=tuple()):
+ 11          meta = []
+ 12  
+ 13          df = pd.DataFrame(data)
+ 14          for index in df:
+ 15              column = df[index]
+ 16  
+ 17              if index in categorical_columns:
+ 18                  mapper = column.value_counts().index.tolist()
+ 19                  meta.append({
+ 20                      "name": index,
+ 21                      "type": CATEGORICAL,
+ 22                      "size": len(mapper),
+ 23                      "i2s": mapper
+ 24                  })
+ 25              else: 
+ 26                  meta.append({
+ 27                      "name": index,
+ 28                      "type": CONTINUOUS,
+ 29                      "min": column.min(),
+ 30                      "max": column.max(),
+ 31                  })
+ 32  
+ 33          return meta
+ 34  
+ 35      def fit(self, data, categorical_columns=tuple()):
+ 36          raise NotImplementedError
+ 37  
+ 38      def transform(self, data):
+ 39          raise NotImplementedError
+ 40  
+ 41      def inverse_transform(self, data):
+ 42          raise NotImplementedError
+ 43  
+ 44  
+ 45  class GeneralTransformer(Transformer):
+ 46  
+ 47      def __init__(self, act='tanh'):
+ 48          self.act = act
+ 49          self.meta = None
+ 50          self.output_dim = None
+ 51  
+ 52      def fit(self, data, categorical_columns=tuple()):
+ 53          self.meta = self.get_metadata(data, categorical_columns)
+ 54          self.output_dim = 0
+ 55          for info in self.meta:
+ 56              if info['type'] in [CONTINUOUS]:
+ 57                  self.output_dim += 1
+ 58              else:
+ 59                  self.output_dim += info['size']
+ 60  
+ 61      def transform(self, data):
+ 62          data_t = []
+ 63          self.output_info = []
+ 64          for id_, info in enumerate(self.meta):
+ 65              col = data[:, id_]
+ 66              if info['type'] == CONTINUOUS:
+ 67                  col = (col - (info['min'])) / (info['max'] - info['min'])
+ 68                  if self.act == 'tanh':
+ 69                      col = col * 2 - 1
+ 70                  data_t.append(col.reshape([-1, 1]))
+ 71                  self.output_info.append((1, self.act))
+ 72  
+ 73              else:
+ 74                  col_t = np.zeros([len(data), info['size']])
+ 75                  idx = list(map(info['i2s'].index, col))
+ 76                  col_t[np.arange(len(data)), idx] = 1
+ 77                  data_t.append(col_t)
+ 78                  self.output_info.append((info['size'], 'softmax'))
+ 79  
+ 80          return np.concatenate(data_t, axis=1)
+ 81  
+ 82      def inverse_transform(self, data):
+ 83          if self.meta[1]['type'] == CONTINUOUS:
+ 84              data_t = np.zeros([len(data), len(self.meta)])
+ 85          else:
+ 86              dtype = np.dtype('U50') 
+ 87              data_t = np.empty([len(data), len(self.meta)], dtype=dtype)
+ 88  
+ 89  
+ 90          data = data.copy()
+ 91          for id_, info in enumerate(self.meta):
+ 92              
+ 93              if info['type'] == CONTINUOUS:
+ 94                  current = data[:, 0]
+ 95                  data = data[:, 1:]
+ 96  
+ 97                  if self.act == 'tanh':
+ 98                      current = (current + 1) / 2
+ 99  
+100                  current = np.clip(current, 0, 1)
+101                  data_t[:, id_] = current * (info['max'] - info['min']) + info['min']
+102  
+103              else:
+104                  current = data[:, :info['size']]
+105                  data = data[:, info['size']:]
+106                  idx = np.argmax(current, axis=1)
+107                  recovered  = list(map(info['i2s'].__getitem__, idx))
+108  
+109                  data_t[:, id_] = recovered
+110          return data_t
+
+---

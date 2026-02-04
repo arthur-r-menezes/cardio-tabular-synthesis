@@ -2,6 +2,8 @@
 
 # Train multiple tabular synthesis models with logs and GPU selection.
 
+# Now auto-prepares data for 'cardio' if missing.
+
 # Usage:
 
 #   ./TRAIN.sh --gpus 0,1 --models ctgan tabddpm tabsyn great stasy --dataname cardio [--parallel]
@@ -10,17 +12,7 @@
 
 #   gpus=0, dataname=cardio, models=(tabddpm ctgan dpctgan tabsyn great stasy)
 
-# Notes:
-
-#   - VAE is auto-run before TabSyn and is not a standalone training option.
-
-#   - In --parallel mode, one background process is started per requested model.
-
-#     If more models than GPUs are provided, GPUs may be shared concurrently.
-
 set -u -o pipefail
-
-# Defaults
 
 DATANAME="cardio"
 declare -a GPUS=("0")
@@ -73,12 +65,70 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Prepare data for 'cardio' if missing
+
+prepare_data() {
+  local ds="${DATANAME}"
+  local data_dir="${REPO_ROOT}/data/${ds}"
+  local train_csv="${data_dir}/train.csv"
+
+  echo "[prep] Dataset: ${ds}" | tee -a "${SUMMARY}"
+
+  # Only auto-download for the cardio dataset
+  if [[ "${ds}" != "cardio" ]]; then
+    if [[ -f "${train_csv}" ]]; then
+      echo "[prep] Found ${train_csv}; skipping auto-download (non-cardio dataset)." | tee -a "${SUMMARY}"
+    else
+      echo "[prep] Non-cardio dataset '${ds}' selected and data not found." | tee -a "${SUMMARY}"
+      echo "[prep] Please ensure data/${ds}/train.csv exists before training." | tee -a "${SUMMARY}"
+    fi
+    return 0
+  fi
+
+  if [[ -f "${train_csv}" ]]; then
+    echo "[prep] Found ${train_csv}; skipping download." | tee -a "${SUMMARY}"
+    return 0
+  fi
+
+  echo "[prep] train.csv not found; downloading cardio dataset..." | tee -a "${SUMMARY}"
+
+  # Ensure kagglehub is available
+  python - <<'PY' >/dev/null 2>&1 || {
+try:
+    import kagglehub  # noqa
+    print("OK")
+except Exception:
+    raise SystemExit(1)
+PY
+  if [[ $? -ne 0 ]]; then
+    echo "[prep] Installing kagglehub..." | tee -a "${SUMMARY}"
+    pip install --quiet kagglehub || {
+      echo "[prep] pip install kagglehub failed." | tee -a "${SUMMARY}"
+      exit 1
+    }
+  fi
+
+  (
+    cd "${REPO_ROOT}"
+    python download_cardio_dataset.py
+  ) >> "${SUMMARY}" 2>&1
+
+  if [[ ! -f "${train_csv}" ]]; then
+    echo "[prep] Data preparation failed; ${train_csv} not found." | tee -a "${SUMMARY}"
+    exit 1
+  fi
+
+  echo "[prep] Data prepared at ${train_csv}" | tee -a "${SUMMARY}"
+}
+
 echo "Start: $(date)" | tee -a "${SUMMARY}"
 echo "Dataname: ${DATANAME}" | tee -a "${SUMMARY}"
 echo "Models: ${MODELS[*]}" | tee -a "${SUMMARY}"
 echo "GPUs: ${GPUS[*]}" | tee -a "${SUMMARY}"
 echo "Parallel: ${PARALLEL}" | tee -a "${SUMMARY}"
 echo "" | tee -a "${SUMMARY}"
+
+prepare_data
 
 gpu_idx=0
 next_gpu() {
@@ -156,7 +206,6 @@ parallel_exec() {
     esac
   done
 
-  # Wait for all background jobs
   for pid in "${PIDS[@]}"; do
     wait "$pid"
   done
