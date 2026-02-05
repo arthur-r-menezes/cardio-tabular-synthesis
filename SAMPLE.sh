@@ -69,6 +69,7 @@ run_single() {
   (
     cd "${REPO_ROOT}"
     export CUDA_VISIBLE_DEVICES="${gpu}"
+    export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
     if [[ "${method}" == "tabddpm" ]]; then
       python main.py --dataname "${DATANAME}" --method tabddpm --mode sample --gpu "${gpu}" ${DDIM_FLAG} --steps "${STEPS}" ${extra}
     else
