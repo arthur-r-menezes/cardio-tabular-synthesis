@@ -311,12 +311,25 @@ def cat_encode(
     # Step 2. Encode.
 
     elif encoding == 'one-hot':
-        ohe = sklearn.preprocessing.OneHotEncoder(
-            handle_unknown='ignore', sparse=False, dtype=np.float32 # type: ignore[code]
-        )
-        encoder = make_pipeline(ohe)
+        from sklearn.preprocessing import OneHotEncoder
 
-        # encoder.steps.append(('ohe', ohe))
+        # Handle both old (sparse) and new (sparse_output) sklearn versions
+        try:
+            # Old API
+            ohe = OneHotEncoder(
+                handle_unknown='ignore',
+                sparse=False,
+                dtype=np.float32,  # type: ignore[arg-type]
+            )
+        except TypeError:
+            # New API: sparse_output instead of sparse
+            ohe = OneHotEncoder(
+                handle_unknown='ignore',
+                sparse_output=False,  # type: ignore[arg-type]
+                dtype=np.float32,     # type: ignore[arg-type]
+            )
+
+        encoder = make_pipeline(ohe)
         encoder.fit(X['train'])
         X = {k: encoder.transform(v) for k, v in X.items()}
 
