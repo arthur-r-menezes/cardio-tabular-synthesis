@@ -58,7 +58,8 @@ echo "Models: ${MODELS[*]}" | tee -a "${SUMMARY}"
 echo "" | tee -a "${SUMMARY}"
 
 ensure_eval_deps() {
-  python - <<'PY' >/dev/null 2>&1 || {
+  # Try importing required eval dependencies in a short Python one-liner.
+  python - <<'PY' >/dev/null 2>&1
 try:
     import sdmetrics  # noqa
     import synthcity  # noqa
@@ -70,6 +71,7 @@ try:
 except Exception:
     raise SystemExit(1)
 PY
+
   if [[ $? -ne 0 ]]; then
     echo "[deps] Installing eval dependencies (sdmetrics, synthcity, xgboost, seaborn, scikit-learn)..." | tee -a "${SUMMARY}"
     pip install --quiet sdmetrics synthcity xgboost seaborn scikit-learn || {
