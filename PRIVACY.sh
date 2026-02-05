@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 
-# PRIVACY.sh - run privacy evaluations (DCR + DOMIAS MIA) on synthetic datasets.
+# PRIVACY.sh - run privacy evaluations (DCR + DOMIAS + Linear Reconstruction Attack) on synthetic datasets.
 
 #
 
 # Usage:
 
-#   ./PRIVACY.sh --dataname cardio --models tabddpm ctgan dpctgan tabsyn great stasy
+#   ./PRIVACY.sh --dataname cardio --models tabddpm ctgan dpctgan tabsyn great stasy \
+
+#                [--domias-mem N] [--domias-ref N] [--domias-syn N] [--domias-density prior|kde|bnaf] \
+
+#                [--domias-epochs N] \
+
+#                [--lra-secret-col COL] [--lra-k 3] [--lra-queries N] [--lra-max-records N]
 
 #
 
@@ -21,19 +27,26 @@ set -u -o pipefail
 DATANAME="cardio"
 declare -a MODELS=("tabddpm" "ctgan" "dpctgan" "tabsyn" "great" "stasy")
 
+# DOMIAS defaults
+
+DOMIAS_MEM=500
+DOMIAS_REF=5000
+DOMIAS_SYN=10000
+DOMIAS_DENSITY="prior"
+DOMIAS_EPOCHS=2000
+
+# Linear Reconstruction Attack (LRA) defaults
+
+LRA_SECRET_COL=""     # if empty, eval_linrecon.py will choose default
+LRA_K=3
+LRA_QUERIES=2000
+LRA_MAX_RECORDS=1000
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${REPO_ROOT}/logs"
 mkdir -p "${LOG_DIR}"
 TS="$(date +%Y%m%d_%H%M%S)"
 SUMMARY="${LOG_DIR}/privacy_${DATANAME}_${TS}.txt"
-
-# DOMIAS args
-
-DOMIAS_MEM=500           # how many real training points are considered “members” in the attack.
-DOMIAS_REF=5000          # size of the reference dataset for estimating p_R.
-DOMIAS_SYN=10000         # how many synthetic points DOMIAS uses internally.
-DOMIAS_DENSITY="prior"   # Density Estimator ("prior / "kde" / "bnaf"). (BNAF is strongest but slowest).
-DOMIAS_EPOCHS=2000       # number of epochs for the internal CTGAN used in baseline LOGAN_0.
 
 # Parse args
 
@@ -42,9 +55,11 @@ while [[ $# -gt 0 ]]; do
     -d|--dataname)
       DATANAME="$2"; shift 2 ;;
     -m|--models)
-      shift; MODELS=()
+      shift
+      MODELS=()
       while [[ $# -gt 0 && ! "$1" =~ ^- ]]; do
-        MODELS+=("$1"); shift; done ;;
+        MODELS+=("$1"); shift
+      done ;;
     --domias-mem)
       DOMIAS_MEM="$2"; shift 2 ;;
     --domias-ref)
@@ -55,8 +70,18 @@ while [[ $# -gt 0 ]]; do
       DOMIAS_DENSITY="$2"; shift 2 ;;
     --domias-epochs)
       DOMIAS_EPOCHS="$2"; shift 2 ;;
+    --lra-secret-col)
+      LRA_SECRET_COL="$2"; shift 2 ;;
+    --lra-k)
+      LRA_K="$2"; shift 2 ;;
+    --lra-queries)
+      LRA_QUERIES="$2"; shift 2 ;;
+    --lra-max-records)
+      LRA_MAX_RECORDS="$2"; shift 2 ;;
     -h|--help)
-      echo "Usage: $0 --dataname cardio --models ... [--domias-mem N] [--domias-ref N] [--domias-syn N] [--domias-density prior|kde|bnaf] [--domias-epochs N]"
+      echo "Usage: $0 --dataname cardio --models tabddpm ctgan dpctgan tabsyn great stasy"
+      echo "       [--domias-mem N] [--domias-ref N] [--domias-syn N] [--domias-density prior|kde|bnaf] [--domias-epochs N]"
+      echo "       [--lra-secret-col COL] [--lra-k 3] [--lra-queries N] [--lra-max-records N]"
       exit 0 ;;
     *)
       echo "Unknown arg: $1"; exit 1 ;;
@@ -94,7 +119,7 @@ for method in "${MODELS[@]}"; do
 
   echo "[privacy] ${DATANAME} / ${method}" | tee -a "${SUMMARY}"
 
-  # Make sure Python can see local packages (src, baselines, domias, etc.)
+  # Make sure Python can see local packages (src, baselines, domias, linrecon, etc.)
   export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 
   # 1) Distance to Closest Record (DCR)
@@ -121,6 +146,14 @@ for method in "${MODELS[@]}"; do
     --training_epochs "${DOMIAS_EPOCHS}" \
     | tail -n 1)"
   echo "  [domias] ${domias_line}" | tee -a "${SUMMARY}"
+
+  # 3) Linear Reconstruction Attack (LRA)
+  lra_args=(--dataname "${DATANAME}" --model "${method}" --k "${LRA_K}" --n_queries "${LRA_QUERIES}" --max_records "${LRA_MAX_RECORDS}")
+  if [[ -n "${LRA_SECRET_COL}" ]]; then
+    lra_args+=(--secret_col "${LRA_SECRET_COL}")
+  fi
+  lra_line="$(python "${REPO_ROOT}/eval/eval_linrecon.py" "${lra_args[@]}" | tail -n 1)"
+  echo "  [linrecon] ${lra_line}" | tee -a "${SUMMARY}"
 done
 
 echo "" | tee -a "${SUMMARY}"
