@@ -93,20 +93,20 @@ prepare_data() {
   echo "[prep] train.csv not found; downloading cardio dataset..." | tee -a "${SUMMARY}"
 
   # Ensure kagglehub is available
-  python - <<'PY' >/dev/null 2>&1 || {
+  if ! python - <<'PY' >/dev/null 2>&1; then
 try:
     import kagglehub  # noqa
     print("OK")
 except Exception:
     raise SystemExit(1)
 PY
-  if [[ $? -ne 0 ]]; then
     echo "[prep] Installing kagglehub..." | tee -a "${SUMMARY}"
     pip install --quiet kagglehub || {
       echo "[prep] pip install kagglehub failed." | tee -a "${SUMMARY}"
       exit 1
     }
   fi
+
 
   (
     cd "${REPO_ROOT}"
