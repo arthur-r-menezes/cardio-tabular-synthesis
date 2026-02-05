@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import torch
+import os 
 
 def _parse_dims(dims_str: str):
     return tuple(int(x) for x in dims_str.split(",") if x.strip())
@@ -37,9 +38,11 @@ def main(args):
     # Paths
     data_dir = repo_root / "data" / dataname
     train_csv = data_dir / "train.csv"
-    ckpt_dir = repo_root / "baselines" / "ctgan" / "ckpt"
+    ckpt_dir = repo_root / "baselines" / "dpctgan" / "ckpt"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     model_path = Path(args.save) if getattr(args, "save", None) else (ckpt_dir / f"{dataname}.pkl")
+    work_dir = repo_root / "baselines" / "dpctgan" / "work" / dataname
+    work_dir.mkdir(parents=True, exist_ok=True)
 
     # Metadata and discrete columns
     info = _load_info(dataname, repo_root)
@@ -89,9 +92,15 @@ def main(args):
     device = f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"
     print(f"Training DP-CTGAN on {train_csv} | device={device} | private={private}")
     print(f"Discrete columns: {discrete_columns}")
+    print(f"Working directory for DP-CTGAN artefacts: {work_dir}")
 
-    # Fit
-    model.fit(df)
+    # Fit in dedicated work_dir so dp-cgans writes its artefacts there
+    prev_cwd = os.getcwd()
+    os.chdir(work_dir)
+    try:
+        model.fit(df)
+    finally:
+        os.chdir(prev_cwd)
 
     # Save checkpoint (use built-in save if available, else pickle)
     try:
