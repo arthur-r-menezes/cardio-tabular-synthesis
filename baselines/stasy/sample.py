@@ -74,7 +74,11 @@ def main(args):
 
     config = get_config(dataname)
     
-    config.device = torch.device(f'cuda:{args.gpu}')
+    if torch.cuda.is_available():
+        config.device = torch.device('cuda:0')
+    else:
+        config.device = torch.device('cpu')
+        
     curr_dir = os.path.dirname(os.path.abspath(__file__))
     ckpt_dir = f'{curr_dir}/ckpt/{dataname}'
     if not os.path.exists(ckpt_dir):
