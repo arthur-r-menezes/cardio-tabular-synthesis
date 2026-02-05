@@ -27,30 +27,39 @@ mkdir -p "${LOG_DIR}"
 TS="$(date +%Y%m%d_%H%M%S)"
 SUMMARY="${LOG_DIR}/privacy_${DATANAME}_${TS}.txt"
 
+# DOMIAS args
+
+DOMIAS_MEM=500           # how many real training points are considered “members” in the attack.
+DOMIAS_REF=5000          # size of the reference dataset for estimating p_R.
+DOMIAS_SYN=10000         # how many synthetic points DOMIAS uses internally.
+DOMIAS_DENSITY="prior"   # Density Estimator ("prior / "kde" / "bnaf"). (BNAF is strongest but slowest).
+DOMIAS_EPOCHS=2000       # number of epochs for the internal CTGAN used in baseline LOGAN_0.
+
 # Parse args
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -d|--dataname)
-      DATANAME="$2"
-      shift 2
-      ;;
+      DATANAME="$2"; shift 2 ;;
     -m|--models)
-      shift
-      MODELS=()
+      shift; MODELS=()
       while [[ $# -gt 0 && ! "$1" =~ ^- ]]; do
-        MODELS+=("$1")
-        shift
-      done
-      ;;
+        MODELS+=("$1"); shift; done ;;
+    --domias-mem)
+      DOMIAS_MEM="$2"; shift 2 ;;
+    --domias-ref)
+      DOMIAS_REF="$2"; shift 2 ;;
+    --domias-syn)
+      DOMIAS_SYN="$2"; shift 2 ;;
+    --domias-density)
+      DOMIAS_DENSITY="$2"; shift 2 ;;
+    --domias-epochs)
+      DOMIAS_EPOCHS="$2"; shift 2 ;;
     -h|--help)
-      echo "Usage: $0 --dataname cardio --models tabddpm ctgan dpctgan tabsyn great stasy"
-      exit 0
-      ;;
+      echo "Usage: $0 --dataname cardio --models ... [--domias-mem N] [--domias-ref N] [--domias-syn N] [--domias-density prior|kde|bnaf] [--domias-epochs N]"
+      exit 0 ;;
     *)
-      echo "Unknown arg: $1"
-      exit 1
-      ;;
+      echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
 
@@ -102,7 +111,15 @@ for method in "${MODELS[@]}"; do
   fi
 
   # 2) DOMIAS membership inference attack
-  domias_line="$(python "${REPO_ROOT}/eval/eval_domias.py" --dataname "${DATANAME}" --model "${method}" | tail -n 1)"
+  domias_line="$(python "${REPO_ROOT}/eval/eval_domias.py" \
+    --dataname "${DATANAME}" \
+    --model "${method}" \
+    --mem_set_size "${DOMIAS_MEM}" \
+    --reference_set_size "${DOMIAS_REF}" \
+    --synthetic_size "${DOMIAS_SYN}" \
+    --density_estimator "${DOMIAS_DENSITY}" \
+    --training_epochs "${DOMIAS_EPOCHS}" \
+    | tail -n 1)"
   echo "  [domias] ${domias_line}" | tee -a "${SUMMARY}"
 done
 
