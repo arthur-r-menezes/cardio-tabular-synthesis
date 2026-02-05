@@ -13,7 +13,10 @@ warnings.filterwarnings('ignore')
 
 def main(args):
     dataname = args.dataname
-    device = args.device
+    if args.gpu != -1 and torch.cuda.is_available():
+        device = 'cuda:0'
+    else:
+        device = 'cpu'
     steps = args.steps
     save_path = args.save_path
 
@@ -65,9 +68,4 @@ if __name__ == '__main__':
     parser.add_argument('--steps', type=int, default=None, help='Number of function evaluations.')
 
     args = parser.parse_args()
-
-    # check cuda
-    if args.gpu != -1 and torch.cuda.is_available():
-        args.device = 'cuda:0'
-    else:
-        args.device = 'cpu'
+    
