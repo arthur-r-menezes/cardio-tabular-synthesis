@@ -3,11 +3,15 @@ import argparse
 from baselines.tabddpm.sample import sample
 
 import src
+import torch
 
 
 def main(args):
     dataname = args.dataname
-    device = f'cuda:{args.gpu}'
+    if torch.cuda.is_available():
+       device = 'cuda:0'   
+    else:
+       device = 'cpu'
 
     curr_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = f'{curr_dir}/configs/{dataname}.toml'

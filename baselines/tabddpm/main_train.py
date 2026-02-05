@@ -4,13 +4,17 @@ import argparse
 from baselines.tabddpm.train import train
 
 import src
+import torch
 
 
 def main(args):
 
     curr_dir = os.path.dirname(os.path.abspath(__file__))
     dataname = args.dataname
-    device = f'cuda:{args.gpu}'
+    if torch.cuda.is_available():
+       device = 'cuda:0'   # first visible GPU (TRAIN.sh sets CUDA_VISIBLE_DEVICES)
+    else:
+       device = 'cpu'
 
     config_path = f'{curr_dir}/configs/{dataname}.toml'
     model_save_path = f'{curr_dir}/ckpt/{dataname}'
