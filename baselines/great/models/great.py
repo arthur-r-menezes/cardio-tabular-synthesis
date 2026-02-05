@@ -19,7 +19,7 @@ from baselines.great.models.great_start import GReaTStart, CategoricalStart, Con
 from baselines.great.models.great_trainer import GReaTTrainer
 from baselines.great.models.great_utils import _array_to_dataframe, _get_column_distribution, _convert_tokens_to_text, \
 _convert_text_to_tabular_data, bcolors
-from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training, TaskType
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, TaskType
 
 class GReaT:
     """ GReaT Class
@@ -75,7 +75,7 @@ class GReaT:
                 task_type=TaskType.CAUSAL_LM # this is specific for gpt2 model, to be adapted
             )
             # prepare int-8 model for training
-            self.model = prepare_model_for_int8_training(self.model)
+            self.model = prepare_model_for_kbit_training(self.model)
             # add LoRA adaptor
             self.model = get_peft_model(self.model, lora_config)
             self.model.print_trainable_parameters()
