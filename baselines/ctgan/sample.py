@@ -4,6 +4,29 @@ import json
 from pathlib import Path
 import pandas as pd
 from ctgan import CTGAN
+import torch
+
+import inspect
+
+def _load_ctgan_checkpoint(path: str) -> CTGAN:
+    """
+    Load a CTGAN checkpoint under PyTorch >= 2.6 by explicitly setting
+    weights_only=False. This bypasses the new safe-unpickling restriction,
+    which is acceptable here because the checkpoint is produced by our
+    own training code (trusted source).
+    """
+    # Make sure CTGAN class is imported so pickle can find it
+    from ctgan import CTGAN as CTGANClass  # noqa: F401
+
+    sig = inspect.signature(torch.load)
+    if 'weights_only' in sig.parameters:
+        obj = torch.load(path, weights_only=False)
+    else:
+        obj = torch.load(path)
+
+    if not isinstance(obj, CTGAN):
+        raise TypeError(f"Loaded object from {path} is not a CTGAN instance (got {type(obj)})")
+    return obj
 
 def _load_info(dataname: str, repo_root: Path):
     info_path_primary = repo_root / "data" / dataname / "info.json"
@@ -51,8 +74,8 @@ def main(args):
     if not model_path.exists():
         raise FileNotFoundError(f"CTGAN checkpoint not found at {model_path}. Train first or pass --load.")
 
-    # Load with CTGAN.load (restores transformer and sampler if saved properly)
-    ctgan = CTGAN.load(str(model_path))
+    # Load checkpoint manually with weights_only=False (trusted source)
+    ctgan = _load_ctgan_checkpoint(str(model_path))
 
     # Safety: if sampler not present (old pickle), rebuild from train.csv
     df_train = pd.read_csv(train_csv)
