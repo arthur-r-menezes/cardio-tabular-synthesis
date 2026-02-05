@@ -125,8 +125,9 @@ class GReaT:
                                           num_train_epochs=self.epochs,
                                           per_device_train_batch_size=self.batch_size,
                                           **self.train_hyperparameters)
-        great_trainer = GReaTTrainer(self.model, training_args, train_dataset=great_ds, tokenizer=self.tokenizer,
+        great_trainer = GReaTTrainer(self.model, training_args, train_dataset=great_ds, # tokenizer=self.tokenizer,
                                      data_collator=GReaTDataCollator(self.tokenizer))
+        great_trainer.tokenizer = self.tokenizer
 
         # Start training
         logging.info("Start training...")
