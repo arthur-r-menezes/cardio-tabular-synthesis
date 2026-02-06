@@ -93,22 +93,27 @@ echo "Dataname: ${DATANAME}" | tee -a "${SUMMARY}"
 echo "Models: ${MODELS[*]}" | tee -a "${SUMMARY}"
 echo "" | tee -a "${SUMMARY}"
 
-# Ensure DOMIAS deps are installed
-
-python - <<'PY' >/dev/null 2>&1 || {
+ensure_domias_deps() {
+  # Check that DOMIAS and geomloss are available
+  python - <<'PY' >/dev/null 2>&1
 try:
     import domias  # noqa
     import geomloss  # noqa
+    print("OK")
 except Exception:
     raise SystemExit(1)
 PY
-if [[ $? -ne 0 ]]; then
-  echo "[deps] Installing DOMIAS dependencies (geomloss, tensorboardX)..." | tee -a "${SUMMARY}"
-  pip install --quiet geomloss tensorboardX || {
-    echo "[deps] pip install failed. Please install geomloss and tensorboardX manually." | tee -a "${SUMMARY}"
-    exit 1
-  }
-fi
+
+  if [[ $? -ne 0 ]]; then
+    echo "[deps] Installing DOMIAS dependencies (geomloss, tensorboardX)..." | tee -a "${SUMMARY}"
+    pip install --quiet geomloss tensorboardX || {
+      echo "[deps] pip install failed. Please install geomloss and tensorboardX manually." | tee -a "${SUMMARY}"
+      exit 1
+    }
+  fi
+}
+
+ensure_domias_deps
 
 for method in "${MODELS[@]}"; do
   SYN_PATH="${REPO_ROOT}/synthetic/${DATANAME}/${method}.csv"
@@ -124,7 +129,7 @@ for method in "${MODELS[@]}"; do
 
   # 1) Distance to Closest Record (DCR)
   dcr_line="$(python "${REPO_ROOT}/eval/eval_dcr.py" --dataname "${DATANAME}" --model "${method}" | tail -n 1)"
-  # Expected format: "<dataname>-<model>, DCR Score = <value>"
+  # Expected format: "<dataname>-<model}, DCR Score = <value>"
   dcr_score="$(echo "${dcr_line}" | awk -F '=' '{print $2}' | tr -d ' ')"
   if [[ -z "${dcr_score}" ]]; then
     echo "  [dcr] failed to parse DCR score from: ${dcr_line}" | tee -a "${SUMMARY}"
