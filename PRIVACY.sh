@@ -126,9 +126,10 @@ for method in "${MODELS[@]}"; do
 
   # Make sure Python can see local packages (src, baselines, domias, linrecon, etc.)
   export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
+  PYTHON_BIN="/opt/conda/envs/cardio/bin/python"
 
   # 1) Distance to Closest Record (DCR)
-  dcr_line="$(python "${REPO_ROOT}/eval/eval_dcr.py" --dataname "${DATANAME}" --model "${method}" | tail -n 1)"
+  dcr_line="$(${PYTHON_BIN} "${REPO_ROOT}/eval/eval_dcr.py" --dataname "${DATANAME}" --model "${method}" | tail -n 1)"
   # Expected format: "<dataname>-<model}, DCR Score = <value>"
   dcr_score="$(echo "${dcr_line}" | awk -F '=' '{print $2}' | tr -d ' ')"
   if [[ -z "${dcr_score}" ]]; then
@@ -141,7 +142,7 @@ for method in "${MODELS[@]}"; do
   fi
 
   # 2) DOMIAS membership inference attack
-  domias_line="$(python "${REPO_ROOT}/eval/eval_domias.py" \
+  domias_line="$(${PYTHON_BIN} "${REPO_ROOT}/eval/eval_domias.py" \
     --dataname "${DATANAME}" \
     --model "${method}" \
     --mem_set_size "${DOMIAS_MEM}" \
@@ -157,7 +158,7 @@ for method in "${MODELS[@]}"; do
   if [[ -n "${LRA_SECRET_COL}" ]]; then
     lra_args+=(--secret_col "${LRA_SECRET_COL}")
   fi
-  lra_line="$(python "${REPO_ROOT}/eval/eval_linrecon.py" "${lra_args[@]}" | tail -n 1)"
+  lra_line="$(${PYTHON_BIN} "${REPO_ROOT}/eval/eval_linrecon.py" "${lra_args[@]}" | tail -n 1)"
   echo "  [linrecon] ${lra_line}" | tee -a "${SUMMARY}"
 done
 
