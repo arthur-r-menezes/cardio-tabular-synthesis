@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
-# PRIVACY.sh - run privacy evaluations (DCR + DOMIAS + Linear Reconstruction Attack) on synthetic datasets.
+# PRIVACY.sh - run privacy evaluations (DCR + DOMIAS + Linear Reconstruction Attack) on synthetic datasets,
+
+# and generate comparative privacy plots.
 
 #
 
@@ -23,6 +25,10 @@
 #   models=(tabddpm ctgan dpctgan tabsyn great stasy)
 
 set -u -o pipefail
+
+# Point this to the Python in your "cardio" env
+
+PYTHON_BIN="/opt/conda/envs/cardio/bin/python"
 
 DATANAME="cardio"
 declare -a MODELS=("tabddpm" "ctgan" "dpctgan" "tabsyn" "great" "stasy")
@@ -95,7 +101,7 @@ echo "" | tee -a "${SUMMARY}"
 
 ensure_domias_deps() {
   # Check that DOMIAS and geomloss are available
-  python - <<'PY' >/dev/null 2>&1
+  "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1
 try:
     import domias  # noqa
     import geomloss  # noqa
@@ -126,11 +132,10 @@ for method in "${MODELS[@]}"; do
 
   # Make sure Python can see local packages (src, baselines, domias, linrecon, etc.)
   export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
-  PYTHON_BIN="/opt/conda/envs/cardio/bin/python"
 
   # 1) Distance to Closest Record (DCR)
-  dcr_line="$(${PYTHON_BIN} "${REPO_ROOT}/eval/eval_dcr.py" --dataname "${DATANAME}" --model "${method}" | tail -n 1)"
-  # Expected format: "<dataname>-<model}, DCR Score = <value>"
+  dcr_line="$("${PYTHON_BIN}" "${REPO_ROOT}/eval/eval_dcr.py" --dataname "${DATANAME}" --model "${method}" | tail -n 1)"
+  # Expected format: "<dataname>-<model>, DCR Score = <value>"
   dcr_score="$(echo "${dcr_line}" | awk -F '=' '{print $2}' | tr -d ' ')"
   if [[ -z "${dcr_score}" ]]; then
     echo "  [dcr] failed to parse DCR score from: ${dcr_line}" | tee -a "${SUMMARY}"
@@ -142,7 +147,7 @@ for method in "${MODELS[@]}"; do
   fi
 
   # 2) DOMIAS membership inference attack
-  domias_line="$(${PYTHON_BIN} "${REPO_ROOT}/eval/eval_domias.py" \
+  domias_line="$("${PYTHON_BIN}" "${REPO_ROOT}/eval/eval_domias.py" \
     --dataname "${DATANAME}" \
     --model "${method}" \
     --mem_set_size "${DOMIAS_MEM}" \
@@ -158,9 +163,15 @@ for method in "${MODELS[@]}"; do
   if [[ -n "${LRA_SECRET_COL}" ]]; then
     lra_args+=(--secret_col "${LRA_SECRET_COL}")
   fi
-  lra_line="$(${PYTHON_BIN} "${REPO_ROOT}/eval/eval_linrecon.py" "${lra_args[@]}" | tail -n 1)"
+  lra_line="$("${PYTHON_BIN}" "${REPO_ROOT}/eval/eval_linrecon.py" "${lra_args[@]}" | tail -n 1)"
   echo "  [linrecon] ${lra_line}" | tee -a "${SUMMARY}"
 done
+
+# Generate comparative privacy plots
+
+echo "" | tee -a "${SUMMARY}"
+echo "[plots] Generating privacy comparison plots..." | tee -a "${SUMMARY}"
+"${PYTHON_BIN}" "${REPO_ROOT}/eval/plot_privacy.py" --dataname "${DATANAME}" --models "${MODELS[@]}" >> "${SUMMARY}" 2>&1
 
 echo "" | tee -a "${SUMMARY}"
 echo "Done. Summary at ${SUMMARY}" | tee -a "${SUMMARY}"
