@@ -74,7 +74,7 @@ def main():
 
     # One-Hot-Encoding kategorialer Features
     if real_cat.shape[1] > 0:
-        ohe = OneHotEncoder(sparse=False, handle_unknown='ignore')
+        ohe = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
         cat_all = np.vstack([real_cat, syn_cat])
         cat_all_oh = ohe.fit_transform(cat_all)
     else:

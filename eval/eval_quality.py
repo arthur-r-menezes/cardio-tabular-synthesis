@@ -7,6 +7,38 @@ import json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils_train import preprocess, TabularDataset
 from sklearn.preprocessing import OneHotEncoder
+
+import torch
+import torch.nn as nn
+
+# Provide RMSNorm for older PyTorch versions that don't have it
+
+if not hasattr(nn, "RMSNorm"):
+    class RMSNorm(nn.Module):
+        """Simple RMSNorm implementation (x / rms(x) * weight)."""
+
+        def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True):
+            super().__init__()
+            if isinstance(normalized_shape, int):
+                normalized_shape = (normalized_shape,)
+            self.normalized_shape = tuple(normalized_shape)
+            self.eps = eps
+            if elementwise_affine:
+                self.weight = nn.Parameter(torch.ones(self.normalized_shape))
+            else:
+                self.register_parameter("weight", None)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            # x: (..., *normalized_shape)
+            rms = x.pow(2).mean(dim=-1, keepdim=True).add(self.eps).sqrt()
+            out = x / rms
+            if self.weight is not None:
+                # Broadcast weight to match x's trailing dimensions
+                return out * self.weight
+            return out
+
+    nn.RMSNorm = RMSNorm
+
 from synthcity.metrics import eval_detection, eval_performance, eval_statistical
 from synthcity.plugins.core.dataloader import GenericDataLoader
 
@@ -117,21 +149,42 @@ if __name__ == '__main__':
     cat_real_data_oh = encoder.transform(cat_real_data_np).toarray()
     cat_syn_data_oh = encoder.transform(cat_syn_data_np).toarray()
 
-    le_real_data = pd.DataFrame(np.concatenate((num_real_data_np, cat_real_data_oh), axis = 1)).astype(float)
+    le_real_data = pd.DataFrame(
+        np.concatenate((num_real_data_np, cat_real_data_oh), axis=1)
+    ).astype(float)
     le_real_num = pd.DataFrame(num_real_data_np).astype(float)
     le_real_cat = pd.DataFrame(cat_real_data_oh).astype(float)
 
-
-    le_syn_data = pd.DataFrame(np.concatenate((num_syn_data_np, cat_syn_data_oh), axis = 1)).astype(float)
+    le_syn_data = pd.DataFrame(
+        np.concatenate((num_syn_data_np, cat_syn_data_oh), axis=1)
+    ).astype(float)
     le_syn_num = pd.DataFrame(num_syn_data_np).astype(float)
     le_syn_cat = pd.DataFrame(cat_syn_data_oh).astype(float)
 
     np.set_printoptions(precision=4)
 
-    result = []
+    # Align lengths: SynthCity AlphaPrecision requires same #rows in real & synthetic
+    n_real = len(le_real_data)
+    n_syn = len(le_syn_data)
+    n = min(n_real, n_syn)
+
+    if n_real != n_syn:
+        rng = np.random.default_rng(0)
+        idx_real = rng.choice(n_real, size=n, replace=False)
+        idx_syn = rng.choice(n_syn, size=n, replace=False)
+
+        le_real_data = le_real_data.iloc[idx_real].reset_index(drop=True)
+        le_syn_data = le_syn_data.iloc[idx_syn].reset_index(drop=True)
+
+        # (Optional) keep num/cat versions consistent if used later
+        le_real_num = le_real_num.iloc[idx_real].reset_index(drop=True)
+        le_real_cat = le_real_cat.iloc[idx_real].reset_index(drop=True)
+        le_syn_num = le_syn_num.iloc[idx_syn].reset_index(drop=True)
+        le_syn_cat = le_syn_cat.iloc[idx_syn].reset_index(drop=True)
 
     print('=========== All Features ===========')
-    print('Data shape: ', le_syn_data.shape)
+    print('Real shape: ', le_real_data.shape)
+    print('Synth shape:', le_syn_data.shape)
 
     X_syn_loader = GenericDataLoader(le_syn_data)
     X_real_loader = GenericDataLoader(le_real_data)

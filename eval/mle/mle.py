@@ -204,7 +204,7 @@ def feat_transform(data, info, label_encoder = None, encoders = None, cmax = Non
             if encoder:
                 feature = encoder.transform(col)
             else:
-                encoder = OneHotEncoder(sparse=False, handle_unknown='ignore')
+                encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
                 encoders[idx] = encoder
                 feature = encoder.fit_transform(col)
                 
@@ -774,4 +774,3 @@ def compute_scores(train, test, synthesized_data, metadata, eval):
         return a.mean(axis=0), a.std(axis=0), a[['name','param']]
     else:
         return a.mean(axis=0), a.std(axis=0)
-
