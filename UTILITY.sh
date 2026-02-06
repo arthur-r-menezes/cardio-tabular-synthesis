@@ -27,6 +27,8 @@ mkdir -p "${LOG_DIR}"
 TS="$(date +%Y%m%d_%H%M%S)"
 SUMMARY="${LOG_DIR}/utility_${DATANAME}_${TS}.txt"
 
+# Parse args
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -d|--dataname)
@@ -136,7 +138,7 @@ done
 
 # Comparative plots (aggregates density, detection, quality, MLE, pMSE)
 
-python "${REPO_ROOT}/eval/plot_compare.py" --dataname "${DATANAME}" --models "${MODELS[*]}" >> "${SUMMARY}" 2>&1
+python "${REPO_ROOT}/eval/plot_compare.py" --dataname "${DATANAME}" --models "${MODELS[@]}" >> "${SUMMARY}" 2>&1
 
 echo "" | tee -a "${SUMMARY}"
 echo "Done. Summary at ${SUMMARY}" | tee -a "${SUMMARY}"
