@@ -91,70 +91,150 @@ def aggregate(dataname, methods, repo):
     return pd.DataFrame(rows)
 
 
+def _plot_metric_grid(
+    df: pd.DataFrame,
+    dataname: str,
+    outdir: Path,
+    group_name: str,
+    metrics: list[tuple[str, str]],
+    ncols: int,
+    ts: str,
+    palette=None,
+) -> None:
+    """
+    Helper to plot a horizontal grid of bar charts, one metric per axis.
+
+    metrics: list of (column_name, pretty_label)
+    ncols: number of columns (axes) in the grid
+    palette: dict mapping method -> color (shared across all plots)
+    """
+    # Filter metrics that actually exist in df
+    available = [(m, label) for (m, label) in metrics if m in df.columns]
+    if not available:
+        # Nothing to plot for this group
+        return
+
+    n_plots = len(available)
+    # Adjust ncols if fewer metrics than requested
+    ncols = min(ncols, n_plots)
+    nrows = int(np.ceil(n_plots / ncols))
+
+    sns.set(style="whitegrid")
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=ncols,
+        figsize=(4 * ncols + 2, 3.5 * nrows),
+        squeeze=False,
+    )
+
+    for idx, (metric, label) in enumerate(available):
+        r = idx // ncols
+        c = idx % ncols
+        ax = axes[r][c]
+
+        sns.barplot(
+            x="method",
+            y=metric,
+            data=df,
+            ax=ax,
+            palette=palette,
+        )
+        ax.set_title(label)
+        ax.set_xlabel("Method")
+        ax.set_ylabel(metric)
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right")
+
+    # Hide any unused axes if we had fewer metrics than nrows*ncols
+    for idx in range(len(available), nrows * ncols):
+        r = idx // ncols
+        c = idx % ncols
+        axes[r][c].set_visible(False)
+
+    fig.suptitle(f"{group_name} — {dataname}", fontsize=14)
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
+
+    fname = f"{group_name.lower().replace(' ', '_')}_{ts}.png"
+    png_path = outdir / fname
+    fig.savefig(png_path, dpi=200)
+    plt.close(fig)
+
+    print(f"Saved {group_name} plot: {png_path}")
+
+
 def plot_all(df, dataname, outdir):
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    sns.set(style="whitegrid")
-    fig = plt.figure(figsize=(14, 10))
-    gs = fig.add_gridspec(2, 2)
+    # Build a consistent color palette per method
+    methods = df["method"].unique().tolist()
+    base_palette = sns.color_palette("tab10", n_colors=len(methods))
+    palette = {m: base_palette[i] for i, m in enumerate(methods)}
 
-    # Dichte: shape/trend (unverändert)
-    ax1 = fig.add_subplot(gs[0, 0])
-    for metric in ["shape", "trend"]:
-        if metric in df.columns:
-            sns.barplot(x="method", y=metric, data=df, ax=ax1, label=metric, alpha=0.7)
-    ax1.set_title("SDMetrics Density: Shape & Trend")
-    ax1.set_xticklabels(ax1.get_xticklabels(), rotation=30, ha="right")
-    ax1.legend()
+    # 1) SDMetrics Density: Shape & Trend (1x2)
+    _plot_metric_grid(
+        df=df,
+        dataname=dataname,
+        outdir=outdir,
+        group_name="SDMetrics Density",
+        metrics=[
+            ("shape", "Shape"),
+            ("trend", "Trend"),
+        ],
+        ncols=2,
+        ts=ts,
+        palette=palette,
+    )
 
-    # Detection + pMSE-Ratio
-    ax2 = fig.add_subplot(gs[0, 1])
-    plotted = False
-    for metric in ["logistic_detection", "pmse_ratio"]:
-        if metric in df.columns:
-            sns.barplot(x="method", y=metric, data=df, ax=ax2, label=metric, alpha=0.7)
-            plotted = True
-    ax2.set_title("Detection / Two-sample metrics")
-    ax2.set_xticklabels(ax2.get_xticklabels(), rotation=30, ha="right")
-    if plotted:
-        ax2.legend()
+    # 2) Detection / Two-sample metrics: LogisticDetection & pMSE ratio (1x2)
+    _plot_metric_grid(
+        df=df,
+        dataname=dataname,
+        outdir=outdir,
+        group_name="Detection / Two-sample",
+        metrics=[
+            ("logistic_detection", "Logistic Detection"),
+            ("pmse_ratio", "pMSE Ratio"),
+        ],
+        ncols=2,
+        ts=ts,
+        palette=palette,
+    )
 
-    # Qualität: alpha/beta (unverändert)
-    ax3 = fig.add_subplot(gs[1, 0])
-    for metric in ["alpha_precision", "beta_recall"]:
-        if metric in df.columns:
-            sns.barplot(x="method", y=metric, data=df, ax=ax3, label=metric, alpha=0.7)
-    ax3.set_title("SynthCity Alpha Precision / Beta Recall")
-    ax3.set_xticklabels(ax3.get_xticklabels(), rotation=30, ha="right")
-    ax3.legend()
+    # 3) SynthCity: Alpha Precision & Beta Recall (1x2)
+    _plot_metric_grid(
+        df=df,
+        dataname=dataname,
+        outdir=outdir,
+        group_name="SynthCity",
+        metrics=[
+            ("alpha_precision", "Alpha Precision"),
+            ("beta_recall", "Beta Recall"),
+        ],
+        ncols=2,
+        ts=ts,
+        palette=palette,
+    )
 
-    # MLE-Downstream-Scores (unverändert außer evtl. import-Updates)
-    ax4 = fig.add_subplot(gs[1, 1])
-    plotted = False
-    for metric in ["mle_weighted_f1", "mle_roc_auc", "mle_accuracy", "mle_r2"]:
-        if metric in df.columns:
-            sns.barplot(x="method", y=metric, data=df, ax=ax4, label=metric, alpha=0.7)
-            plotted = True
-    if "mle_rmse" in df.columns:
-        df["_mle_rmse_neg"] = -df["mle_rmse"]
-        sns.barplot(x="method", y="_mle_rmse_neg", data=df, ax=ax4, label="(-) rmse", alpha=0.7)
-        plotted = True
-    ax4.set_title("MLE downstream scores")
-    ax4.set_xticklabels(ax4.get_xticklabels(), rotation=30, ha="right")
-    if plotted:
-        ax4.legend()
+    # 4) MLE downstream scores: weighted F1, ROC AUC, Accuracy (1x3)
+    _plot_metric_grid(
+        df=df,
+        dataname=dataname,
+        outdir=outdir,
+        group_name="MLE Downstream Scores",
+        metrics=[
+            ("mle_weighted_f1", "Weighted F1"),
+            ("mle_roc_auc", "ROC AUC"),
+            ("mle_accuracy", "Accuracy"),
+        ],
+        ncols=3,
+        ts=ts,
+        palette=palette,
+    )
 
-    fig.suptitle(f"Comparative Evaluation — {dataname}", fontsize=16)
-    fig.tight_layout(rect=[0, 0, 1, 0.97])
-
-    png_path = outdir / f"compare_{ts}.png"
-    fig.savefig(png_path, dpi=200)
+    # Save the numeric summary table as before
     csv_path = outdir / f"summary_{ts}.csv"
     df.to_csv(csv_path, index=False)
-
-    print(f"Saved plots: {png_path}")
     print(f"Saved summary: {csv_path}")
 
 def main():
