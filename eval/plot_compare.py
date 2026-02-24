@@ -96,6 +96,7 @@ def _plot_metric_grid(
     dataname: str,
     outdir: Path,
     group_name: str,
+    file_prefix: str,
     metrics: list[tuple[str, str]],
     ncols: int,
     ts: str,
@@ -107,6 +108,7 @@ def _plot_metric_grid(
     metrics: list of (column_name, pretty_label)
     ncols: number of columns (axes) in the grid
     palette: dict mapping method -> color (shared across all plots)
+    file_prefix: safe string (no slashes) used for the output filename
     """
     # Filter metrics that actually exist in df
     available = [(m, label) for (m, label) in metrics if m in df.columns]
@@ -142,7 +144,11 @@ def _plot_metric_grid(
         ax.set_title(label)
         ax.set_xlabel("Method")
         ax.set_ylabel(metric)
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right")
+
+        # Rotate x tick labels without using set_xticklabels()
+        ax.tick_params(axis="x", labelrotation=30)
+        for tick_label in ax.get_xticklabels():
+            tick_label.set_horizontalalignment("right")
 
     # Hide any unused axes if we had fewer metrics than nrows*ncols
     for idx in range(len(available), nrows * ncols):
@@ -153,8 +159,9 @@ def _plot_metric_grid(
     fig.suptitle(f"{group_name} — {dataname}", fontsize=14)
     fig.tight_layout(rect=[0, 0, 1, 0.93])
 
-    fname = f"{group_name.lower().replace(' ', '_')}_{ts}.png"
+    fname = f"{file_prefix}_{ts}.png"
     png_path = outdir / fname
+    png_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(png_path, dpi=200)
     plt.close(fig)
 
@@ -177,6 +184,7 @@ def plot_all(df, dataname, outdir):
         dataname=dataname,
         outdir=outdir,
         group_name="SDMetrics Density",
+        file_prefix="sdmetrics_density",
         metrics=[
             ("shape", "Shape"),
             ("trend", "Trend"),
@@ -192,6 +200,7 @@ def plot_all(df, dataname, outdir):
         dataname=dataname,
         outdir=outdir,
         group_name="Detection / Two-sample",
+        file_prefix="detection_two_sample",
         metrics=[
             ("logistic_detection", "Logistic Detection"),
             ("pmse_ratio", "pMSE Ratio"),
@@ -207,6 +216,7 @@ def plot_all(df, dataname, outdir):
         dataname=dataname,
         outdir=outdir,
         group_name="SynthCity",
+        file_prefix="synthcity",
         metrics=[
             ("alpha_precision", "Alpha Precision"),
             ("beta_recall", "Beta Recall"),
@@ -222,6 +232,7 @@ def plot_all(df, dataname, outdir):
         dataname=dataname,
         outdir=outdir,
         group_name="MLE Downstream Scores",
+        file_prefix="mle_downstream_scores",
         metrics=[
             ("mle_weighted_f1", "Weighted F1"),
             ("mle_roc_auc", "ROC AUC"),
