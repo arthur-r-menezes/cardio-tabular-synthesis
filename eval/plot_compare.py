@@ -102,6 +102,7 @@ def _plot_metric_grid(
     ts: str,
     palette=None,
     y_lim: tuple[float, float] | None = None,
+    log_metrics: set[str] | None = None,
 ) -> None:
     """
     Helper to plot a horizontal grid of bar charts, one metric per axis.
@@ -111,6 +112,7 @@ def _plot_metric_grid(
     palette: dict mapping method -> color (shared across all plots)
     file_prefix: safe string (no slashes) used for the output filename
     y_lim: optional (ymin, ymax) to set on all axes
+    log_metrics: optional set of metric names to plot on a log y-axis
     """
     # Filter metrics that actually exist in df
     available = [(m, label) for (m, label) in metrics if m in df.columns]
@@ -145,9 +147,26 @@ def _plot_metric_grid(
         ax.set_xlabel("Method")
         ax.set_ylabel(metric)
 
-        # Optional y-axis zoom
+        # Optional y-axis zoom (e.g., MLE)
         if y_lim is not None:
             ax.set_ylim(*y_lim)
+
+        # Optional log scale for selected metrics (e.g., pmse_ratio)
+        if log_metrics is not None and metric in log_metrics:
+            # pMSE ratio should be > 0; if any non-positive slip through, clip them
+            ymin, ymax = ax.get_ylim()
+            if ymin <= 0:
+                ymin = min(v for v in df[metric] if v > 0) * 0.5
+                ax.set_ylim(bottom=ymin, top=ymax)
+            ax.set_yscale("log")
+            # Null baseline at ratio = 1
+            ax.axhline(
+                1.0,
+                color="gray",
+                linestyle="--",
+                linewidth=1.0,
+                alpha=0.8,
+            )
 
         # Rotate x tick labels
         ax.tick_params(axis="x", labelrotation=30)
@@ -198,7 +217,7 @@ def plot_all(df, dataname, outdir):
         palette=palette,
     )
 
-    # 2) Detection / Two-sample metrics (1x2)
+    # 2) Detection / Two-sample metrics (1x2), log-y + baseline for pMSE ratio
     _plot_metric_grid(
         df=df,
         dataname=dataname,
@@ -212,6 +231,7 @@ def plot_all(df, dataname, outdir):
         ncols=2,
         ts=ts,
         palette=palette,
+        log_metrics={"pmse_ratio"},
     )
 
     # 3) SynthCity: Alpha Precision & Beta Recall (1x2)
