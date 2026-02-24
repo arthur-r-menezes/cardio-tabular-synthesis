@@ -101,6 +101,7 @@ def _plot_metric_grid(
     ncols: int,
     ts: str,
     palette=None,
+    y_lim: tuple[float, float] | None = None,
 ) -> None:
     """
     Helper to plot a horizontal grid of bar charts, one metric per axis.
@@ -109,15 +110,14 @@ def _plot_metric_grid(
     ncols: number of columns (axes) in the grid
     palette: dict mapping method -> color (shared across all plots)
     file_prefix: safe string (no slashes) used for the output filename
+    y_lim: optional (ymin, ymax) to set on all axes
     """
     # Filter metrics that actually exist in df
     available = [(m, label) for (m, label) in metrics if m in df.columns]
     if not available:
-        # Nothing to plot for this group
         return
 
     n_plots = len(available)
-    # Adjust ncols if fewer metrics than requested
     ncols = min(ncols, n_plots)
     nrows = int(np.ceil(n_plots / ncols))
 
@@ -145,12 +145,16 @@ def _plot_metric_grid(
         ax.set_xlabel("Method")
         ax.set_ylabel(metric)
 
-        # Rotate x tick labels without using set_xticklabels()
+        # Optional y-axis zoom
+        if y_lim is not None:
+            ax.set_ylim(*y_lim)
+
+        # Rotate x tick labels
         ax.tick_params(axis="x", labelrotation=30)
         for tick_label in ax.get_xticklabels():
             tick_label.set_horizontalalignment("right")
 
-    # Hide any unused axes if we had fewer metrics than nrows*ncols
+    # Hide unused axes
     for idx in range(len(available), nrows * ncols):
         r = idx // ncols
         c = idx % ncols
@@ -173,7 +177,7 @@ def plot_all(df, dataname, outdir):
     outdir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Build a consistent color palette per method
+    # Consistent color palette per method
     methods = df["method"].unique().tolist()
     base_palette = sns.color_palette("tab10", n_colors=len(methods))
     palette = {m: base_palette[i] for i, m in enumerate(methods)}
@@ -194,7 +198,7 @@ def plot_all(df, dataname, outdir):
         palette=palette,
     )
 
-    # 2) Detection / Two-sample metrics: LogisticDetection & pMSE ratio (1x2)
+    # 2) Detection / Two-sample metrics (1x2)
     _plot_metric_grid(
         df=df,
         dataname=dataname,
@@ -226,7 +230,7 @@ def plot_all(df, dataname, outdir):
         palette=palette,
     )
 
-    # 4) MLE downstream scores: weighted F1, ROC AUC, Accuracy (1x3)
+    # 4) MLE downstream scores (1x3), zoom y-axis to [0.6, 0.8]
     _plot_metric_grid(
         df=df,
         dataname=dataname,
@@ -241,9 +245,10 @@ def plot_all(df, dataname, outdir):
         ncols=3,
         ts=ts,
         palette=palette,
+        y_lim=(0.6, 0.8),
     )
 
-    # Save the numeric summary table as before
+    # Summary CSV
     csv_path = outdir / f"summary_{ts}.csv"
     df.to_csv(csv_path, index=False)
     print(f"Saved summary: {csv_path}")
