@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 from datetime import datetime
+from sklearn.manifold import TSNE
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 import numpy as np
 import pandas as pd
@@ -90,6 +92,220 @@ def aggregate(dataname, methods, repo):
       rows.append(row)
     return pd.DataFrame(rows)
 
+
+def _compute_tsne_for_method(
+    dataname: str,
+    method: str,
+    repo_root: Path,
+    max_samples: int = 2000,
+    perplexity: float = 30.0,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """
+    Build a joint real+synthetic feature representation and run t-SNE for one method.
+    Returns (Z_real, Z_syn) in R^2, or None if data is missing.
+    """
+    data_dir = repo_root / "data" / dataname
+    real_path = repo_root / "synthetic" / dataname / "real.csv"
+    syn_path = repo_root / "synthetic" / dataname / f"{method}.csv"
+
+    if not real_path.exists() or not syn_path.exists():
+        print(f"[tsne] Skip {method}: missing real or synthetic CSV")
+        return None
+
+    with open(data_dir / "info.json", "r", encoding="utf-8") as f:
+        info = json.load(f)
+
+    real_df = pd.read_csv(real_path)
+    syn_df = pd.read_csv(syn_path)
+
+    # Harmonize column indices
+    real_df.columns = range(len(real_df.columns))
+    syn_df.columns = range(len(syn_df.columns))
+
+    num_idx = list(info["num_col_idx"])
+    cat_idx = list(info["cat_col_idx"])
+    target_idx = list(info["target_col_idx"])
+    task_type = info["task_type"]
+
+    # For binclass: target treated as categorical; for regression: as numeric
+    if task_type == "regression":
+        num_idx = num_idx + target_idx
+    else:
+        cat_idx = cat_idx + target_idx
+
+    # Extract numerical / categorical parts
+    n_real = real_df.shape[0]
+    n_syn = syn_df.shape[0]
+
+    real_num = (
+        real_df[num_idx].to_numpy(dtype=np.float32) if num_idx else np.empty((n_real, 0), dtype=np.float32)
+    )
+    syn_num = (
+        syn_df[num_idx].to_numpy(dtype=np.float32) if num_idx else np.empty((n_syn, 0), dtype=np.float32)
+    )
+
+    real_cat = (
+        real_df[cat_idx].astype(str).to_numpy() if cat_idx else np.empty((n_real, 0), dtype=str)
+    )
+    syn_cat = (
+        syn_df[cat_idx].astype(str).to_numpy() if cat_idx else np.empty((n_syn, 0), dtype=str)
+    )
+
+    # Numeric scaling
+    if real_num.shape[1] > 0:
+        scaler = StandardScaler()
+        num_all = np.vstack([real_num, syn_num])
+        num_all_scaled = scaler.fit_transform(num_all)
+    else:
+        num_all_scaled = np.empty((n_real + n_syn, 0), dtype=np.float32)
+
+    # One-hot encoding for categoricals
+    if real_cat.shape[1] > 0:
+        try:
+            ohe = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
+        except TypeError:
+            # Older sklearn
+            ohe = OneHotEncoder(sparse=False, handle_unknown="ignore")
+        cat_all = np.vstack([real_cat, syn_cat])
+        cat_all_oh = ohe.fit_transform(cat_all)
+    else:
+        cat_all_oh = np.empty((n_real + n_syn, 0), dtype=np.float32)
+
+    X_all = np.hstack([num_all_scaled, cat_all_oh]).astype(np.float32)
+
+    if X_all.shape[1] == 0:
+        print(f"[tsne] Skip {method}: empty feature matrix")
+        return None
+
+    # Subsample for t-SNE
+    max_per = max(1, max_samples)
+    rng = np.random.default_rng(0)
+
+    idx_real = np.arange(n_real)
+    if n_real > max_per:
+        idx_real = rng.choice(idx_real, size=max_per, replace=False)
+
+    idx_syn = np.arange(n_syn)
+    if n_syn > max_per:
+        idx_syn = rng.choice(idx_syn, size=max_per, replace=False)
+
+    X_real = X_all[idx_real]
+    X_syn = X_all[n_real + idx_syn]
+
+    X = np.vstack([X_real, X_syn])
+    labels = np.concatenate(
+        [np.zeros(len(idx_real), dtype=int), np.ones(len(idx_syn), dtype=int)]
+    )
+
+    # Perplexity must be < number of samples
+    eff_perp = min(perplexity, max(5.0, (X.shape[0] - 1) / 3.0))
+
+    tsne = TSNE(
+        n_components=2,
+        perplexity=eff_perp,
+        learning_rate="auto",
+        init="random",
+        random_state=0,
+    )
+    Z = tsne.fit_transform(X)
+
+    Z_real = Z[labels == 0]
+    Z_syn = Z[labels == 1]
+    return Z_real, Z_syn
+
+
+def plot_tsne_grid(
+    dataname: str,
+    methods: list[str],
+    repo_root: Path,
+    outdir: Path,
+    palette: dict[str, any],
+    max_samples: int = 2000,
+    perplexity: float = 30.0,
+) -> None:
+    """
+    For each method, compute a t-SNE embedding (real + synthetic)
+    and plot them in a single grid:
+      - real points: grey
+      - synthetic points: method-specific color (from palette)
+
+    """
+    results: list[tuple[str, np.ndarray, np.ndarray]] = []
+    for m in methods:
+        res = _compute_tsne_for_method(
+            dataname=dataname,
+            method=m,
+            repo_root=repo_root,
+            max_samples=max_samples,
+            perplexity=perplexity,
+        )
+        if res is None:
+            continue
+        Z_real, Z_syn = res
+        results.append((m, Z_real, Z_syn))
+
+    if not results:
+        print("[tsne] No t-SNE plots generated (no valid methods).")
+        return
+
+    n = len(results)
+    ncols = int(np.ceil(np.sqrt(n)))
+    nrows = int(np.ceil(n / ncols))
+
+    sns.set(style="whitegrid")
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=ncols,
+        figsize=(4 * ncols + 2, 4 * nrows),
+        squeeze=False,
+    )
+
+    for idx, (method, Z_real, Z_syn) in enumerate(results):
+        r = idx // ncols
+        c = idx % ncols
+        ax = axes[r][c]
+
+        # Real points in grey
+        ax.scatter(
+            Z_real[:, 0],
+            Z_real[:, 1],
+            s=5,
+            alpha=0.3,
+            color="gray",
+            label="Real" if idx == 0 else None,
+        )
+        # Synthetic points in method color
+        ax.scatter(
+            Z_syn[:, 0],
+            Z_syn[:, 1],
+            s=5,
+            alpha=0.5,
+            color=palette.get(method, "C0"),
+            label=method if idx == 0 else None,
+        )
+        ax.set_title(method)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        if idx == 0:
+            ax.legend(loc="best", fontsize=8)
+
+    # Hide unused axes
+    for idx in range(len(results), nrows * ncols):
+        r = idx // ncols
+        c = idx % ncols
+        axes[r][c].set_visible(False)
+
+    fig.suptitle(f"t-SNE: Real vs Synthetic — {dataname}", fontsize=14)
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    png_path = outdir / f"tsne_grid_{ts}.png"
+    png_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(png_path, dpi=200)
+    plt.close(fig)
+
+    print(f"Saved t-SNE grid: {png_path}")
 
 def _plot_metric_grid(
     df: pd.DataFrame,
@@ -190,7 +406,6 @@ def _plot_metric_grid(
 
     print(f"Saved {group_name} plot: {png_path}")
 
-
 def plot_all(df, dataname, outdir):
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -266,6 +481,18 @@ def plot_all(df, dataname, outdir):
         ts=ts,
         palette=palette,
         y_lim=(0.6, 0.8),
+    )
+
+    # 5) t-SNE grid: real (grey) vs synthetic (method color)
+    repo_root = Path(__file__).resolve().parents[1]
+    plot_tsne_grid(
+        dataname=dataname,
+        methods=methods,
+        repo_root=repo_root,
+        outdir=outdir,
+        palette=palette,
+        max_samples=2000,
+        perplexity=30.0,
     )
 
     # Summary CSV
