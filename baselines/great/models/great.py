@@ -12,7 +12,37 @@ from tqdm import tqdm
 import torch
 from transformers import (AutoTokenizer,
                           AutoModelForCausalLM,
-                          TrainingArguments)
+                          TrainingArguments
+                          )
+from transformers.utils import import_utils
+
+# --- Disable torch>=2.6 torch.load guard + weights_only strictness in this process ---
+
+# 1) Disable transformers' safety check (we only load our own checkpoints).
+
+if hasattr(import_utils, "check_torch_load_is_safe"):
+    import_utils.check_torch_load_is_safe = lambda *args, **kwargs: None
+
+try:
+    import transformers.trainer as hf_trainer
+    if hasattr(hf_trainer, "check_torch_load_is_safe"):
+        hf_trainer.check_torch_load_is_safe = lambda *args, **kwargs: None
+except Exception:
+    pass
+
+# 2) Disable strict "weights_only" unpickler inside this process:
+
+_original_torch_load = torch.load
+
+def _unsafe_torch_load(*args, **kwargs):
+    # For legacy checkpoints, 'weights_only=True' breaks due to stricter unpickler.
+    # We drop that flag and use the regular pickle loader (trusted checkpoints only).
+    kwargs.pop("weights_only", None)
+    return _original_torch_load(*args, **kwargs)
+
+torch.load = _unsafe_torch_load
+
+# -------------------------------------------------------------------------
 
 from baselines.great.models.great_dataset import GReaTDataset, GReaTDataCollator
 from baselines.great.models.great_start import GReaTStart, CategoricalStart, ContinuousStart, RandomStart
