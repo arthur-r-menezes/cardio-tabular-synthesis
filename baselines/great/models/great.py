@@ -321,14 +321,22 @@ class GReaT:
         torch.save(self.model.state_dict(), path + "/model.pt")
 
     def load_finetuned_model(self, path: str):
-        """ Load fine-tuned model
-
-        Load the weights of a fine-tuned large language model into the GReaT pipeline
+        """Load fine-tuned model.
 
         Args:
-            path: Path to the fine-tuned model
+            path: Either
+                - a HuggingFace checkpoint directory (e.g. '.../checkpoint-230000'), or
+                - a file path to a state_dict (e.g. '.../model.pt') saved via self.save().
+
         """
-        self.model.load_state_dict(torch.load(path))
+        if os.path.isdir(path):
+            # HF-style checkpoint dir: let AutoModelForCausalLM load it
+            logging.info(f"Loading HF checkpoint from directory: {path}")
+            self.model = AutoModelForCausalLM.from_pretrained(path)
+        else:
+            logging.info(f"Loading state_dict from file: {path}")
+            state_dict = torch.load(path)
+            self.model.load_state_dict(state_dict)
 
     @classmethod
     def load_from_dir(cls, path: str):
