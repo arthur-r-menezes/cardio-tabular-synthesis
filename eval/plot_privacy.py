@@ -81,15 +81,28 @@ def plot_privacy(df: pd.DataFrame, dataname: str, outdir: Path):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     sns.set(style="whitegrid")
+
+    # Build a consistent color palette per method (like in plot_compare.py)
+    methods = df["method"].tolist()
+    base_palette = sns.color_palette("tab10", n_colors=len(methods))
+    palette = {m: base_palette[i] for i, m in enumerate(methods)}
+
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
     axes = axes.flatten()
 
     # 0) Distance to Closest Record (DCR)
     ax = axes[0]
     if "dcr_score" in df.columns:
-        sns.barplot(x="method", y="dcr_score", data=df, ax=ax, color="C0")
+        sns.barplot(
+            x="method",
+            y="dcr_score",
+            data=df,
+            ax=ax,
+            palette=palette,
+        )
         ax.set_title("DCR score (closer to 0.5 is better)")
-        ax.set_ylim(0.0, 1.0)
+        # Zoom in to [0.75, 0.85]
+        ax.set_ylim(0.75, 0.85)
         ax.set_ylabel("DCR score")
         ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right")
     else:
@@ -98,9 +111,16 @@ def plot_privacy(df: pd.DataFrame, dataname: str, outdir: Path):
     # 1) DOMIAS AUCROC
     ax = axes[1]
     if "domias_aucroc" in df.columns:
-        sns.barplot(x="method", y="domias_aucroc", data=df, ax=ax, color="C1")
+        sns.barplot(
+            x="method",
+            y="domias_aucroc",
+            data=df,
+            ax=ax,
+            palette=palette,
+        )
         ax.set_title("DOMIAS AUCROC (MI attack)")
-        ax.set_ylim(0.0, 1.0)
+        # Zoom in to [0.45, 0.55]
+        ax.set_ylim(0.45, 0.55)
         ax.set_ylabel("AUCROC")
         ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right")
     else:
@@ -109,28 +129,77 @@ def plot_privacy(df: pd.DataFrame, dataname: str, outdir: Path):
     # 2) Linear Reconstruction AUCROC
     ax = axes[2]
     if "lra_aucroc" in df.columns:
-        sns.barplot(x="method", y="lra_aucroc", data=df, ax=ax, color="C2")
+        sns.barplot(
+            x="method",
+            y="lra_aucroc",
+            data=df,
+            ax=ax,
+            palette=palette,
+        )
         ax.set_title("Linear Reconstruction AUCROC")
-        ax.set_ylim(0.0, 1.0)
+        # Zoom in to [0.45, 0.55]
+        ax.set_ylim(0.45, 0.55)
         ax.set_ylabel("AUCROC")
         ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right")
     else:
         ax.set_visible(False)
 
-    # 3) Combined accuracies (DOMIAS vs LRA) if both exist
+    # 3) Combined accuracies (DOMIAS vs LRA) with zoom and consistent colors
     ax = axes[3]
-    plotted = False
-    if "domias_accuracy" in df.columns:
-        sns.barplot(x="method", y="domias_accuracy", data=df, ax=ax, color="C1", alpha=0.7, label="DOMIAS acc")
-        plotted = True
-    if "lra_accuracy" in df.columns:
-        sns.barplot(x="method", y="lra_accuracy", data=df, ax=ax, color="C2", alpha=0.7, label="LRA acc")
-        plotted = True
-    if plotted:
+    has_domias = "domias_accuracy" in df.columns
+    has_lra = "lra_accuracy" in df.columns
+
+    if has_domias or has_lra:
+        x = np.arange(len(methods))
+        width = 0.35
+
+        # Build values in method order
+        if has_domias:
+            domias_vals = [
+                df.loc[df["method"] == m, "domias_accuracy"].iloc[0]
+                for m in methods
+            ]
+        else:
+            domias_vals = None
+
+        if has_lra:
+            lra_vals = [
+                df.loc[df["method"] == m, "lra_accuracy"].iloc[0]
+                for m in methods
+            ]
+        else:
+            lra_vals = None
+
+        colors = [palette[m] for m in methods]
+
+        # Bars: same color per method, different hatch per attack
+        if has_domias:
+            ax.bar(
+                x - width / 2,
+                domias_vals,
+                width,
+                color=colors,
+                hatch="//",
+                label="DOMIAS acc",
+                edgecolor="black",
+            )
+        if has_lra:
+            ax.bar(
+                x + width / 2,
+                lra_vals,
+                width,
+                color=colors,
+                hatch="\\\\",
+                label="LRA acc",
+                edgecolor="black",
+            )
+
         ax.set_title("Attack accuracies (membership vs reconstruction)")
-        ax.set_ylim(0.0, 1.0)
+        # Zoom in to [0.4, 0.8]
+        ax.set_ylim(0.4, 0.8)
         ax.set_ylabel("Accuracy")
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right")
+        ax.set_xticks(x)
+        ax.set_xticklabels(methods, rotation=30, ha="right")
         ax.legend()
     else:
         ax.set_visible(False)
