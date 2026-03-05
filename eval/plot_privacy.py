@@ -82,17 +82,17 @@ def plot_privacy(df: pd.DataFrame, dataname: str, outdir: Path):
 
     sns.set(style="whitegrid")
 
-    # Build a consistent color palette per method (like in plot_compare.py)
+    # Consistent color palette per method (like utility plots)
     methods = df["method"].tolist()
     base_palette = sns.color_palette("tab10", n_colors=len(methods))
     palette = {m: base_palette[i] for i, m in enumerate(methods)}
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    axes = axes.flatten()
-
-    # 0) Distance to Closest Record (DCR)
-    ax = axes[0]
+    # ------------------------------------------------------------------
+    # Image 1: DCR Score (single plot)
+    # ------------------------------------------------------------------
     if "dcr_score" in df.columns:
+        fig, ax = plt.subplots(figsize=(6, 4))
+
         sns.barplot(
             x="method",
             y="dcr_score",
@@ -100,121 +100,138 @@ def plot_privacy(df: pd.DataFrame, dataname: str, outdir: Path):
             ax=ax,
             palette=palette,
         )
-        ax.set_title("DCR score (closer to 0.5 is better)")
-        # Zoom in to [0.75, 0.85]
-        ax.set_ylim(0.75, 0.85)
+        ax.set_title(f"DCR score — {dataname} (closer to 0.5 is better)")
+        # Cardio: ~0.898–0.903
+        ax.set_ylim(0.897, 0.904)
         ax.set_ylabel("DCR score")
+        ax.set_xlabel("Method")
         ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right")
+
+        png_path = outdir / f"privacy_dcr_{ts}.png"
+        fig.tight_layout()
+        fig.savefig(png_path, dpi=200)
+        plt.close(fig)
+        print(f"Saved DCR plot: {png_path}")
     else:
-        ax.set_visible(False)
+        print("[privacy] No 'dcr_score' column found; skipping DCR plot.")
 
-    # 1) DOMIAS AUCROC
-    ax = axes[1]
-    if "domias_aucroc" in df.columns:
-        sns.barplot(
-            x="method",
-            y="domias_aucroc",
-            data=df,
-            ax=ax,
-            palette=palette,
-        )
-        ax.set_title("DOMIAS AUCROC (MI attack)")
-        # Zoom in to [0.45, 0.55]
-        ax.set_ylim(0.45, 0.55)
-        ax.set_ylabel("AUCROC")
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right")
-    else:
-        ax.set_visible(False)
+    # ------------------------------------------------------------------
+    # Image 2: DOMIAS (2x1: AUCROC + accuracy)
+    # ------------------------------------------------------------------
+    has_domias_auc = "domias_aucroc" in df.columns
+    has_domias_acc = "domias_accuracy" in df.columns
 
-    # 2) Linear Reconstruction AUCROC
-    ax = axes[2]
-    if "lra_aucroc" in df.columns:
-        sns.barplot(
-            x="method",
-            y="lra_aucroc",
-            data=df,
-            ax=ax,
-            palette=palette,
-        )
-        ax.set_title("Linear Reconstruction AUCROC")
-        # Zoom in to [0.45, 0.55]
-        ax.set_ylim(0.45, 0.55)
-        ax.set_ylabel("AUCROC")
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right")
-    else:
-        ax.set_visible(False)
+    if has_domias_auc or has_domias_acc:
+        fig, axes = plt.subplots(2, 1, figsize=(7, 7), sharex=True)
+        ax_auc, ax_acc = axes
 
-    # 3) Combined accuracies (DOMIAS vs LRA) with zoom and consistent colors
-    ax = axes[3]
-    has_domias = "domias_accuracy" in df.columns
-    has_lra = "lra_accuracy" in df.columns
-
-    if has_domias or has_lra:
-        x = np.arange(len(methods))
-        width = 0.35
-
-        # Build values in method order
-        if has_domias:
-            domias_vals = [
-                df.loc[df["method"] == m, "domias_accuracy"].iloc[0]
-                for m in methods
-            ]
-        else:
-            domias_vals = None
-
-        if has_lra:
-            lra_vals = [
-                df.loc[df["method"] == m, "lra_accuracy"].iloc[0]
-                for m in methods
-            ]
-        else:
-            lra_vals = None
-
-        colors = [palette[m] for m in methods]
-
-        # Bars: same color per method, different hatch per attack
-        if has_domias:
-            ax.bar(
-                x - width / 2,
-                domias_vals,
-                width,
-                color=colors,
-                hatch="//",
-                label="DOMIAS acc",
-                edgecolor="black",
+        if has_domias_auc:
+            sns.barplot(
+                x="method",
+                y="domias_aucroc",
+                data=df,
+                ax=ax_auc,
+                palette=palette,
             )
-        if has_lra:
-            ax.bar(
-                x + width / 2,
-                lra_vals,
-                width,
-                color=colors,
-                hatch="\\\\",
-                label="LRA acc",
-                edgecolor="black",
+            ax_auc.set_title("DOMIAS AUCROC (MI attack)")
+            # Cardio: ~0.501–0.506
+            ax_auc.set_ylim(0.500, 0.508)
+            ax_auc.set_ylabel("AUCROC")
+        else:
+            ax_auc.set_visible(False)
+
+        if has_domias_acc:
+            sns.barplot(
+                x="method",
+                y="domias_accuracy",
+                data=df,
+                ax=ax_acc,
+                palette=palette,
             )
+            ax_acc.set_title("DOMIAS accuracy")
+            # Use your original attack-accuracy zoom
+            ax_acc.set_ylim(0.40, 0.80)
+            ax_acc.set_ylabel("Accuracy")
+        else:
+            ax_acc.set_visible(False)
 
-        ax.set_title("Attack accuracies (membership vs reconstruction)")
-        # Zoom in to [0.4, 0.8]
-        ax.set_ylim(0.4, 0.8)
-        ax.set_ylabel("Accuracy")
-        ax.set_xticks(x)
-        ax.set_xticklabels(methods, rotation=30, ha="right")
-        ax.legend()
+        # Shared x-axis formatting
+        if has_domias_auc or has_domias_acc:
+            ax_acc.set_xlabel("Method")
+            for ax in axes:
+                if ax.get_visible():
+                    ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right")
+
+        fig.suptitle(f"DOMIAS — {dataname}", fontsize=14)
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+
+        png_path = outdir / f"privacy_domias_{ts}.png"
+        fig.savefig(png_path, dpi=200)
+        plt.close(fig)
+        print(f"Saved DOMIAS plot: {png_path}")
     else:
-        ax.set_visible(False)
+        print("[privacy] No DOMIAS columns found; skipping DOMIAS plots.")
 
-    fig.suptitle(f"Privacy Evaluation — {dataname}", fontsize=16)
-    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    # ------------------------------------------------------------------
+    # Image 3: Linear Reconstruction (2x1: AUCROC + accuracy)
+    # ------------------------------------------------------------------
+    has_lra_auc = "lra_aucroc" in df.columns
+    has_lra_acc = "lra_accuracy" in df.columns
 
-    png_path = outdir / f"privacy_compare_{ts}.png"
-    fig.savefig(png_path, dpi=200)
-    plt.close(fig)
+    if has_lra_auc or has_lra_acc:
+        fig, axes = plt.subplots(2, 1, figsize=(7, 7), sharex=True)
+        ax_auc, ax_acc = axes
 
+        if has_lra_auc:
+            sns.barplot(
+                x="method",
+                y="lra_aucroc",
+                data=df,
+                ax=ax_auc,
+                palette=palette,
+            )
+            ax_auc.set_title("Linear Reconstruction AUCROC")
+            # Cardio: ~0.604–0.699
+            ax_auc.set_ylim(0.60, 0.71)
+            ax_auc.set_ylabel("AUCROC")
+        else:
+            ax_auc.set_visible(False)
+
+        if has_lra_acc:
+            sns.barplot(
+                x="method",
+                y="lra_accuracy",
+                data=df,
+                ax=ax_acc,
+                palette=palette,
+            )
+            ax_acc.set_title("Linear Reconstruction accuracy")
+            ax_acc.set_ylim(0.40, 0.80)
+            ax_acc.set_ylabel("Accuracy")
+        else:
+            ax_acc.set_visible(False)
+
+        if has_lra_auc or has_lra_acc:
+            ax_acc.set_xlabel("Method")
+            for ax in axes:
+                if ax.get_visible():
+                    ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right")
+
+        fig.suptitle(f"Linear Reconstruction — {dataname}", fontsize=14)
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+
+        png_path = outdir / f"privacy_lra_{ts}.png"
+        fig.savefig(png_path, dpi=200)
+        plt.close(fig)
+        print(f"Saved LRA plot: {png_path}")
+    else:
+        print("[privacy] No LRA columns found; skipping LRA plots.")
+
+    # ------------------------------------------------------------------
+    # CSV summary (unchanged)
+    # ------------------------------------------------------------------
     csv_path = outdir / f"privacy_summary_{ts}.csv"
     df.to_csv(csv_path, index=False)
-
-    print(f"Saved privacy plots: {png_path}")
     print(f"Saved privacy summary: {csv_path}")
 
 
