@@ -86,9 +86,9 @@ if __name__ == '__main__':
     encoder.fit(cat_real_data_np)
 
 
-    cat_real_data_oh = encoder.transform(cat_real_data_np).toarray()
-    cat_syn_data_oh = encoder.transform(cat_syn_data_np).toarray()
-    cat_test_data_oh = encoder.transform(cat_test_data_np).toarray()
+    cat_real_data_oh = encoder.transform(cat_real_data_np)
+    cat_syn_data_oh = encoder.transform(cat_syn_data_np)
+    cat_test_data_oh = encoder.transform(cat_test_data_np)
 
     # If encoder returns sparse matrices (older sklearn), convert to dense
 
@@ -118,7 +118,6 @@ if __name__ == '__main__':
     dcrs_test = []
     batch_size = 100
 
-    batch_syn_data_np = syn_data_np[i*batch_size: (i+1) * batch_size]
 
     for i in range((syn_data_th.shape[0] // batch_size) + 1):
         if i != (syn_data_th.shape[0] // batch_size):
