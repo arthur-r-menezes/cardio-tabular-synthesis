@@ -78,13 +78,24 @@ if __name__ == '__main__':
     num_test_data_np = num_test_data.to_numpy()
     cat_test_data_np = cat_test_data.to_numpy().astype('str')
 
-    encoder = OneHotEncoder()
+    try:
+        encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
+    except TypeError:
+        # Older sklearn versions use 'sparse' instead of 'sparse_output'
+        encoder = OneHotEncoder(handle_unknown='ignore', sparse=False)
     encoder.fit(cat_real_data_np)
 
 
     cat_real_data_oh = encoder.transform(cat_real_data_np).toarray()
     cat_syn_data_oh = encoder.transform(cat_syn_data_np).toarray()
     cat_test_data_oh = encoder.transform(cat_test_data_np).toarray()
+
+    # If encoder returns sparse matrices (older sklearn), convert to dense
+
+    if hasattr(cat_real_data_oh, "toarray"):
+        cat_real_data_oh = cat_real_data_oh.toarray()
+        cat_syn_data_oh = cat_syn_data_oh.toarray()
+        cat_test_data_oh = cat_test_data_oh.toarray()
 
     num_real_data_np = num_real_data_np / num_ranges
     num_syn_data_np = num_syn_data_np / num_ranges
